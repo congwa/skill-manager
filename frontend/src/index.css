@@ -1,0 +1,315 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* shadcn custom variants (inlined from shadcn/dist/tailwind.css) */
+@custom-variant data-open {
+  &:where([data-state="open"]),
+  &:where([data-open]:not([data-open="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-closed {
+  &:where([data-state="closed"]),
+  &:where([data-closed]:not([data-closed="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-checked {
+  &:where([data-state="checked"]),
+  &:where([data-checked]:not([data-checked="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-unchecked {
+  &:where([data-state="unchecked"]),
+  &:where([data-unchecked]:not([data-unchecked="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-selected {
+  &:where([data-selected="true"]) {
+    @slot;
+  }
+}
+@custom-variant data-disabled {
+  &:where([data-disabled="true"]),
+  &:where([data-disabled]:not([data-disabled="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-active {
+  &:where([data-state="active"]),
+  &:where([data-active]:not([data-active="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-horizontal {
+  &:where([data-orientation="horizontal"]) {
+    @slot;
+  }
+}
+@custom-variant data-vertical {
+  &:where([data-orientation="vertical"]) {
+    @slot;
+  }
+}
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@theme {
+  /* shadcn accordion keyframes */
+  @keyframes accordion-down {
+    from { height: 0; }
+    to { height: var(--radix-accordion-content-height, var(--accordion-panel-height, auto)); }
+  }
+  @keyframes accordion-up {
+    from { height: var(--radix-accordion-content-height, var(--accordion-panel-height, auto)); }
+    to { height: 0; }
+  }
+}
+
+@theme {
+  /* ===== 自定义品牌色 - 软糯星球 ===== */
+  /* 主色 - 蜜桃粉 */
+  --color-peach-50: #FFF5F0;
+  --color-peach-100: #FFE8DB;
+  --color-peach-200: #FFD1B8;
+  --color-peach-300: #FFB694;
+  --color-peach-400: #FF9B70;
+  --color-peach-500: #FF8A65;
+  --color-peach-600: #E57A5A;
+  --color-peach-700: #CC6B4F;
+
+  /* 辅助色 - 薰衣草紫 */
+  --color-lavender-50: #F5F0FF;
+  --color-lavender-100: #E8DBFF;
+  --color-lavender-200: #D1B8FF;
+  --color-lavender-300: #B694FF;
+  --color-lavender-400: #9B70FF;
+  --color-lavender-500: #B8A9E8;
+
+  /* 语义色 - 薄荷绿 */
+  --color-mint-50: #EDFCF5;
+  --color-mint-100: #D1FAE5;
+  --color-mint-200: #A7F3D0;
+  --color-mint-300: #6EE7B7;
+  --color-mint-400: #34D399;
+  --color-mint-500: #81C9A3;
+
+  /* 语义色 - 蜂蜜橙 */
+  --color-honey-50: #FFF9EB;
+  --color-honey-100: #FFF0C2;
+  --color-honey-200: #FFE08A;
+  --color-honey-300: #FFD166;
+  --color-honey-400: #FFC233;
+  --color-honey-500: #FFBF47;
+
+  /* 语义色 - 草莓红 */
+  --color-strawberry-50: #FFF1F0;
+  --color-strawberry-100: #FFE0DB;
+  --color-strawberry-200: #FFC1B8;
+  --color-strawberry-300: #FFA094;
+  --color-strawberry-400: #FF7F70;
+  --color-strawberry-500: #FF6B6B;
+
+  /* 语义色 - 天空蓝 */
+  --color-sky-50: #F0F9FF;
+  --color-sky-100: #E0F2FE;
+  --color-sky-200: #BAE6FD;
+  --color-sky-300: #7DD3FC;
+  --color-sky-400: #38BDF8;
+  --color-sky-500: #7BC4E8;
+
+  /* 中性色 - 奶油色系 */
+  --color-cream-50: #FFF8F3;
+  --color-cream-100: #FFF0E6;
+  --color-cream-200: #F5EDE6;
+  --color-cream-300: #F0E0D4;
+  --color-cream-400: #D4C4B0;
+  --color-cream-500: #C4A882;
+  --color-cream-600: #8B7355;
+  --color-cream-700: #6B5A45;
+  --color-cream-800: #4A3728;
+  --color-cream-900: #3A2A1E;
+
+  /* 字体 */
+  --font-family-display: 'Varela Round', sans-serif;
+  --font-family-body: 'Nunito Sans', sans-serif;
+  --font-family-mono: 'JetBrains Mono', monospace;
+
+  /* 阴影 - Claymorphism */
+  --shadow-soft: 0 2px 8px rgba(74, 55, 40, 0.06);
+  --shadow-card: 0 4px 16px rgba(74, 55, 40, 0.08), 0 2px 4px rgba(74, 55, 40, 0.04);
+  --shadow-card-hover: 0 8px 24px rgba(74, 55, 40, 0.12), 0 4px 8px rgba(74, 55, 40, 0.06);
+  --shadow-clay: 6px 6px 12px rgba(74, 55, 40, 0.1), -4px -4px 10px rgba(255, 255, 255, 0.7);
+  --shadow-clay-inset: inset 4px 4px 8px rgba(74, 55, 40, 0.08), inset -3px -3px 6px rgba(255, 255, 255, 0.6);
+  --shadow-float: 0 12px 32px rgba(74, 55, 40, 0.15);
+
+  /* ===== shadcn/ui 主题色 (直接值，不用 var 引用) ===== */
+  --radius-sm: 0.475rem;
+  --radius-md: 0.675rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.275rem;
+  --radius-2xl: 1.675rem;
+  --radius-3xl: 2.075rem;
+  --radius-4xl: 2.475rem;
+  --color-background: #FFF8F3;
+  --color-foreground: #4A3728;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #4A3728;
+  --color-popover: #FFFFFF;
+  --color-popover-foreground: #4A3728;
+  --color-primary: #FF9B70;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #B8A9E8;
+  --color-secondary-foreground: #FFFFFF;
+  --color-muted: #FFF0E6;
+  --color-muted-foreground: #8B7355;
+  --color-accent: #FFF0E6;
+  --color-accent-foreground: #4A3728;
+  --color-destructive: #FF6B6B;
+  --color-border: #F0E0D4;
+  --color-input: #F0E0D4;
+  --color-ring: #FFD1B8;
+  --color-chart-1: #FF9B70;
+  --color-chart-2: #B8A9E8;
+  --color-chart-3: #81C9A3;
+  --color-chart-4: #FFD166;
+  --color-chart-5: #7BC4E8;
+  --color-sidebar: #FFF8F3;
+  --color-sidebar-foreground: #4A3728;
+  --color-sidebar-primary: #FF9B70;
+  --color-sidebar-primary-foreground: #FFFFFF;
+  --color-sidebar-accent: #FFE8DB;
+  --color-sidebar-accent-foreground: #4A3728;
+  --color-sidebar-border: #F0E0D4;
+  --color-sidebar-ring: #FFD1B8;
+}
+
+/* ===== 暗色主题变量覆盖 ===== */
+.dark {
+  /* shadcn/ui 语义色 */
+  --color-background: #1C1412;
+  --color-foreground: #F5EDE6;
+  --color-card: #261D18;
+  --color-card-foreground: #F5EDE6;
+  --color-popover: #261D18;
+  --color-popover-foreground: #F5EDE6;
+  --color-primary: #FF9B70;
+  --color-primary-foreground: #1C1412;
+  --color-secondary: #9B8AD0;
+  --color-secondary-foreground: #1C1412;
+  --color-muted: #2E2320;
+  --color-muted-foreground: #A89080;
+  --color-accent: #2E2320;
+  --color-accent-foreground: #F5EDE6;
+  --color-destructive: #E05555;
+  --color-border: #3D2E26;
+  --color-input: #3D2E26;
+  --color-ring: #CC6B4F;
+  --color-chart-1: #FF9B70;
+  --color-chart-2: #9B8AD0;
+  --color-chart-3: #6BB893;
+  --color-chart-4: #E0B850;
+  --color-chart-5: #5EAAD0;
+  --color-sidebar: #1C1412;
+  --color-sidebar-foreground: #F5EDE6;
+  --color-sidebar-primary: #FF9B70;
+  --color-sidebar-primary-foreground: #1C1412;
+  --color-sidebar-accent: #2E2320;
+  --color-sidebar-accent-foreground: #F5EDE6;
+  --color-sidebar-border: #3D2E26;
+  --color-sidebar-ring: #CC6B4F;
+
+  /* 品牌色 - 暗色降饱和 */
+  --color-peach-50: #2E1F18;
+  --color-peach-100: #3D2820;
+  --color-peach-200: #5C3A2E;
+  --color-peach-300: #8B5640;
+  --color-peach-400: #CC7A55;
+  --color-peach-500: #FF8A65;
+  --color-peach-600: #FFB694;
+  --color-peach-700: #FFD1B8;
+
+  /* 奶油中性色 - 暗色反转 */
+  --color-cream-50: #1C1412;
+  --color-cream-100: #261D18;
+  --color-cream-200: #2E2320;
+  --color-cream-300: #3D2E26;
+  --color-cream-400: #5C4A3D;
+  --color-cream-500: #8B7355;
+  --color-cream-600: #A89080;
+  --color-cream-700: #C4B0A0;
+  --color-cream-800: #F0E0D4;
+  --color-cream-900: #FFF8F3;
+
+  /* 语义色 - 暗色适配 */
+  --color-mint-50: #142018;
+  --color-mint-100: #1A3025;
+  --color-mint-500: #6BB893;
+  --color-honey-50: #201C12;
+  --color-honey-100: #302A18;
+  --color-honey-500: #E0B850;
+  --color-strawberry-50: #201414;
+  --color-strawberry-100: #301A1A;
+  --color-strawberry-200: #5C2828;
+  --color-strawberry-400: #E05555;
+  --color-strawberry-500: #FF6B6B;
+  --color-lavender-50: #1A1620;
+  --color-lavender-100: #252030;
+  --color-lavender-500: #9B8AD0;
+  --color-sky-50: #121820;
+  --color-sky-100: #182030;
+  --color-sky-500: #5EAAD0;
+
+  /* 阴影 - 暗色适配 */
+  --shadow-soft: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.25), 0 2px 4px rgba(0, 0, 0, 0.15);
+  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.35), 0 4px 8px rgba(0, 0, 0, 0.2);
+  --shadow-clay: 6px 6px 12px rgba(0, 0, 0, 0.3), -4px -4px 10px rgba(60, 45, 35, 0.15);
+  --shadow-clay-inset: inset 4px 4px 8px rgba(0, 0, 0, 0.2), inset -3px -3px 6px rgba(60, 45, 35, 0.1);
+  --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    font-family: var(--font-family-body);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+    @apply bg-background text-foreground;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-family-display);
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-cream-100);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-cream-400);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-cream-500);
+  }
+}

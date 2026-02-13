@@ -1,0 +1,7 @@
+{
+  "name": "gsap-fundamentals",
+  "description": "Core GSAP animation concepts including tweens, timelines, easing functions, and animation properties. Use when implementing basic animations, transitions, or learning GSAP foundations. Essential starting point for any GSAP-based animation work.",
+  "tags": [],
+  "sub_skills": [],
+  "source": "claude-user"
+}
