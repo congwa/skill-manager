@@ -1,3 +1,4 @@
+use log::info;
 use rusqlite::params;
 use tauri::State;
 use uuid::Uuid;
@@ -244,6 +245,7 @@ pub struct AppInitStatus {
 
 #[tauri::command]
 pub async fn get_app_init_status(pool: State<'_, DbPool>) -> Result<AppInitStatus, AppError> {
+    info!("[get_app_init_status] 检查应用初始化状态");
     let home = dirs::home_dir().expect("Cannot find home directory");
     let base = home.join(".skills-manager");
     let db_path = base.join("db").join("skills.db");
@@ -278,6 +280,7 @@ pub async fn initialize_app(
     skills_lib_path: Option<String>,
     pool: State<'_, DbPool>,
 ) -> Result<AppInitStatus, AppError> {
+    info!("[initialize_app] 开始初始化应用, skills_lib_path: {:?}", skills_lib_path);
     let home = dirs::home_dir().expect("Cannot find home directory");
     let base = home.join(".skills-manager");
 
@@ -324,11 +327,13 @@ pub async fn initialize_app(
         tx.commit()?;
     }
 
+    info!("[initialize_app] 初始化完成，获取状态...");
     get_app_init_status(pool).await
 }
 
 #[tauri::command]
 pub async fn reset_app(pool: State<'_, DbPool>) -> Result<(), AppError> {
+    info!("[reset_app] 重置应用数据");
     let conn = pool.get()?;
     let tx = conn.unchecked_transaction()?;
 

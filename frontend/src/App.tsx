@@ -33,20 +33,42 @@ function App() {
 
   useEffect(() => {
     const bootstrap = async () => {
+      console.log('[App] === Skills Manager 前端启动 ===')
+      const t0 = performance.now()
+
       try {
         if (isTauri()) {
+          console.log('[App] 检测到 Tauri 环境')
+
+          console.log('[App] 1/4 检查应用初始化状态...')
           const status = await settingsApi.getInitStatus()
+          console.log('[App] 初始化状态:', JSON.stringify(status, null, 2))
+
           if (!status.initialized) {
-            await settingsApi.initializeApp()
+            console.log('[App] 2/4 首次运行，执行应用初始化...')
+            const initResult = await settingsApi.initializeApp()
+            console.log('[App] 初始化完成:', JSON.stringify(initResult, null, 2))
+          } else {
+            console.log('[App] 2/4 应用已初始化，跳过')
           }
-          // 每次启动扫描全局工具目录的 Skill 入库
-          await scannerApi.scanGlobalSkills().catch(console.error)
+
+          console.log('[App] 3/4 扫描全局工具目录 Skill...')
+          const scanResult = await scannerApi.scanGlobalSkills().catch((e) => {
+            console.error('[App] 全局扫描失败:', e)
+            return null
+          })
+          if (scanResult) {
+            console.log(`[App] 全局扫描完成: 发现工具 [${scanResult.tools_found.join(', ')}], 新导入 ${scanResult.skills_imported} 个 Skill, 新建 ${scanResult.deployments_created} 个部署`)
+          }
+        } else {
+          console.log('[App] 非 Tauri 环境，使用 mock 数据')
         }
       } catch (e) {
-        console.error('App init error:', e)
+        console.error('[App] 初始化出错:', e)
       }
 
-      await Promise.allSettled([
+      console.log('[App] 4/4 拉取所有 Store 数据...')
+      const results = await Promise.allSettled([
         initOnboarding(),
         fetchProjects(),
         fetchSkills(),
@@ -56,6 +78,18 @@ function App() {
         fetchSyncHistory(),
         fetchGitConfig(),
       ])
+
+      const names = ['onboarding', 'projects', 'skills', 'deployments', 'settings', 'changeEvents', 'syncHistory', 'gitConfig']
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled') {
+          console.log(`[App]   ✓ ${names[i]} 加载成功`)
+        } else {
+          console.error(`[App]   ✗ ${names[i]} 加载失败:`, r.reason)
+        }
+      })
+
+      const elapsed = (performance.now() - t0).toFixed(0)
+      console.log(`[App] === 启动完成 (${elapsed}ms) ===`)
       setAppReady(true)
     }
     bootstrap()

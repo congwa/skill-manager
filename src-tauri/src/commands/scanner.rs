@@ -1,3 +1,4 @@
+use log::info;
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ const TOOL_DIRS: &[(&str, &str)] = &[
 
 #[tauri::command]
 pub async fn scan_project(project_path: String) -> Result<ScanResult, AppError> {
+    info!("[scan_project] 开始扫描项目: {}", project_path);
     let base = PathBuf::from(&project_path);
     if !base.exists() || !base.is_dir() {
         return Err(AppError::Validation(format!("路径不存在或不是目录: {}", project_path)));
@@ -58,6 +60,7 @@ pub async fn scan_project(project_path: String) -> Result<ScanResult, AppError> 
         }
     }
 
+    info!("[scan_project] 扫描完成: 发现 {} 个工具, {} 个 Skill", tools.len(), skills.len());
     Ok(ScanResult {
         project_name,
         project_path,
@@ -71,6 +74,7 @@ pub async fn scan_and_import_project(
     project_path: String,
     pool: State<'_, DbPool>,
 ) -> Result<ScanResult, AppError> {
+    info!("[scan_and_import] 开始扫描并导入: {}", project_path);
     let scan_result = scan_project(project_path.clone()).await?;
 
     let conn = pool.get()?;
@@ -142,6 +146,7 @@ pub async fn scan_and_import_project(
     }
 
     tx.commit()?;
+    info!("[scan_and_import] 导入完成: {} 个 Skill 已入库", scan_result.skills.len());
 
     Ok(scan_result)
 }
@@ -165,6 +170,7 @@ pub struct GlobalScanResult {
 pub async fn scan_global_skills(
     pool: State<'_, DbPool>,
 ) -> Result<GlobalScanResult, AppError> {
+    info!("[scan_global] 开始扫描全局工具目录...");
     let home = dirs::home_dir().expect("Cannot find home directory");
     let mut tools_found = Vec::new();
     let mut all_skills: Vec<(String, ScannedSkill)> = Vec::new();
@@ -272,6 +278,8 @@ pub async fn scan_global_skills(
         deployments_created = deploy_count;
     }
 
+    info!("[scan_global] 扫描完成: 发现工具 {:?}, 导入 {} 个 Skill, 创建 {} 个部署",
+        tools_found, skills_imported, deployments_created);
     Ok(GlobalScanResult {
         tools_found,
         skills_imported,

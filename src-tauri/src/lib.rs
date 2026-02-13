@@ -4,15 +4,42 @@ mod error;
 mod models;
 
 use db::pool;
+use log::info;
+use tauri::Manager;
 
 pub fn run() {
-    let db_path = pool::get_db_path();
-    let db_pool = pool::create_pool(&db_path).expect("Failed to create database pool");
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
 
+    info!("=== Skills Manager 启动 ===");
+
+    info!("[启动] 初始化数据库连接池...");
+    let db_path = pool::get_db_path();
+    info!("[启动] 数据库路径: {}", db_path.display());
+    let db_pool = pool::create_pool(&db_path).expect("Failed to create database pool");
+    info!("[启动] 数据库连接池创建成功");
+
+    info!("[启动] 构建 Tauri 应用...");
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            info!("[启动] Tauri setup 钩子执行");
+            #[cfg(debug_assertions)]
+            {
+                info!("[启动] Debug 模式：自动打开 DevTools");
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                    info!("[启动] DevTools 已打开");
+                } else {
+                    log::warn!("[启动] 未找到 main 窗口，无法打开 DevTools");
+                }
+            }
+            info!("[启动] Tauri 应用就绪");
+            Ok(())
+        })
         .manage(db_pool)
         .invoke_handler(tauri::generate_handler![
             // Projects

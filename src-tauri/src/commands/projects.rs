@@ -1,3 +1,4 @@
+use log::info;
 use rusqlite::params;
 use tauri::State;
 use uuid::Uuid;
@@ -8,6 +9,7 @@ use crate::models::{Project, DashboardStats, ProjectDetailDeployment};
 
 #[tauri::command]
 pub async fn get_projects(pool: State<'_, DbPool>) -> Result<Vec<Project>, AppError> {
+    info!("[get_projects] 查询所有项目");
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
         "SELECT p.id, p.name, p.path, p.status, p.last_scanned,
@@ -38,6 +40,7 @@ pub async fn get_projects(pool: State<'_, DbPool>) -> Result<Vec<Project>, AppEr
 
 #[tauri::command]
 pub async fn add_project(path: String, pool: State<'_, DbPool>) -> Result<Project, AppError> {
+    info!("[add_project] 添加项目: {}", path);
     let project_path = std::path::Path::new(&path);
     if !project_path.exists() || !project_path.is_dir() {
         return Err(AppError::Validation(format!("路径不存在或不是目录: {}", path)));
@@ -85,6 +88,7 @@ pub async fn add_project(path: String, pool: State<'_, DbPool>) -> Result<Projec
 
 #[tauri::command]
 pub async fn remove_project(project_id: String, pool: State<'_, DbPool>) -> Result<(), AppError> {
+    info!("[remove_project] 删除项目: {}", project_id);
     let conn = pool.get()?;
     let affected = conn.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
     if affected == 0 {
@@ -128,6 +132,7 @@ pub async fn get_project_deployments(
 
 #[tauri::command]
 pub async fn get_dashboard_stats(pool: State<'_, DbPool>) -> Result<DashboardStats, AppError> {
+    info!("[get_dashboard_stats] 查询仪表盘统计");
     let conn = pool.get()?;
 
     let total_projects: i64 = conn.query_row(
