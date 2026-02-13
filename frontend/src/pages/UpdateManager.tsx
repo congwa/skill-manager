@@ -19,7 +19,7 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn, sourceLabels } from '@/lib/utils'
 import { toast } from 'sonner'
-import { isTauri, skillsApi } from '@/lib/tauri-api'
+import { skillsApi } from '@/lib/tauri-api'
 import type { SkillUpdateInfoRow } from '@/lib/tauri-api'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { useSyncStore } from '@/stores/useSyncStore'
@@ -43,14 +43,12 @@ export default function UpdateManager() {
   const handleCheck = async () => {
     setChecking(true)
     try {
-      if (isTauri()) {
-        console.log('[UpdateManager] 检查更新...')
-        const infos = await skillsApi.checkUpdates()
-        console.log(`[UpdateManager] 检查完成: ${infos.length} 个 Skill`)
-        setUpdates(infos.map((info) => ({ ...info, selected: false })))
-        setLastCheckTime(new Date().toLocaleTimeString())
-        toast.success(`检查完成: 发现 ${infos.length} 个 Skill`)
-      }
+      console.log('[UpdateManager] 检查更新...')
+      const infos = await skillsApi.checkUpdates()
+      console.log(`[UpdateManager] 检查完成: ${infos.length} 个 Skill`)
+      setUpdates(infos.map((info) => ({ ...info, selected: false })))
+      setLastCheckTime(new Date().toLocaleTimeString())
+      toast.success(`检查完成: 发现 ${infos.length} 个 Skill`)
     } catch (e) {
       console.error('[UpdateManager] 检查失败:', e)
       toast.error('检查失败')

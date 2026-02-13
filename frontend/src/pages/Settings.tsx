@@ -24,7 +24,7 @@ import { cn, toolColors, toolNames } from '@/lib/utils'
 import type { ToolName } from '@/types'
 import { toast } from 'sonner'
 import { useTheme } from 'next-themes'
-import { isTauri, settingsApi } from '@/lib/tauri-api'
+import { settingsApi } from '@/lib/tauri-api'
 
 const sections = [
   { id: 'general', label: '通用', icon: SettingsIcon },
@@ -56,49 +56,43 @@ export default function Settings() {
   }
 
   const handleSelectSkillLibPath = async () => {
-    if (isTauri()) {
-      try {
-        const { open } = await import('@tauri-apps/plugin-dialog')
-        const selected = await open({ directory: true, multiple: false, title: '选择 Skill 库路径' })
-        if (selected) {
-          updateSettings({ skill_library_path: selected as string })
-        }
-      } catch (e) {
-        console.error('dialog error:', e)
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({ directory: true, multiple: false, title: '选择 Skill 库路径' })
+      if (selected) {
+        updateSettings({ skill_library_path: selected as string })
       }
+    } catch (e) {
+      console.error('dialog error:', e)
     }
   }
 
   const handleSelectBackupPath = async () => {
-    if (isTauri()) {
-      try {
-        const { open } = await import('@tauri-apps/plugin-dialog')
-        const selected = await open({ directory: true, multiple: false, title: '选择备份目录' })
-        if (selected) {
-          await settingsApi.set('backup_dir', selected as string)
-          toast.success('备份目录已更新')
-        }
-      } catch (e) {
-        console.error('dialog error:', e)
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({ directory: true, multiple: false, title: '选择备份目录' })
+      if (selected) {
+        await settingsApi.set('backup_dir', selected as string)
+        toast.success('备份目录已更新')
       }
+    } catch (e) {
+      console.error('dialog error:', e)
     }
   }
 
   const handleSaveGitConfig = async () => {
-    if (isTauri()) {
-      try {
-        await settingsApi.saveGitConfig({
-          provider: gitPlatform,
-          remoteUrl: gitUrl,
-          authType: authType,
-          branch: 'main',
-          autoExport: 'manual',
-        })
-        toast.success('Git 配置已保存')
-      } catch (e) {
-        console.error('save git config error:', e)
-        toast.error('保存失败')
-      }
+    try {
+      await settingsApi.saveGitConfig({
+        provider: gitPlatform,
+        remoteUrl: gitUrl,
+        authType: authType,
+        branch: 'main',
+        autoExport: 'manual',
+      })
+      toast.success('Git 配置已保存')
+    } catch (e) {
+      console.error('save git config error:', e)
+      toast.error('保存失败')
     }
   }
 

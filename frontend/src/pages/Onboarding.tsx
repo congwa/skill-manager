@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { useUIStore } from '@/stores/useUIStore'
 import { useProjectStore } from '@/stores/useProjectStore'
-import { isTauri, settingsApi, scannerApi } from '@/lib/tauri-api'
+import { settingsApi, scannerApi } from '@/lib/tauri-api'
 import type { ScanResultData } from '@/lib/tauri-api'
 
 const steps = ['欢迎', '选择路径', '导入项目', 'Git 配置']
@@ -33,18 +33,14 @@ export default function Onboarding() {
   const fetchProjects = useProjectStore((s) => s.fetchProjects)
 
   const handleSelectFolder = async () => {
-    if (isTauri()) {
-      try {
-        const { open } = await import('@tauri-apps/plugin-dialog')
-        const selected = await open({ directory: true, multiple: false, title: '选择项目目录' })
-        if (selected) {
-          handleScanPath(selected as string)
-        }
-      } catch (e) {
-        console.error('dialog error:', e)
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({ directory: true, multiple: false, title: '选择项目目录' })
+      if (selected) {
+        handleScanPath(selected as string)
       }
-    } else {
-      handleScanMock()
+    } catch (e) {
+      console.error('dialog error:', e)
     }
   }
 
@@ -52,14 +48,12 @@ export default function Onboarding() {
     setScanning(true)
     setScanProgress(20)
     try {
-      if (isTauri()) {
-        setScanProgress(50)
-        const result = await scannerApi.scanAndImport(projectPath)
-        setScanResult(result)
-        setScanProgress(100)
-        setScanned(true)
-        await fetchProjects()
-      }
+      setScanProgress(50)
+      const result = await scannerApi.scanAndImport(projectPath)
+      setScanResult(result)
+      setScanProgress(100)
+      setScanned(true)
+      await fetchProjects()
     } catch (e) {
       console.error('scan error:', e)
     } finally {
@@ -67,29 +61,16 @@ export default function Onboarding() {
     }
   }
 
-  const handleScanMock = () => {
-    setScanning(true)
-    setScanProgress(0)
-    const interval = setInterval(() => {
-      setScanProgress((p) => {
-        if (p >= 100) { clearInterval(interval); setScanning(false); setScanned(true); return 100 }
-        return p + 20
-      })
-    }, 400)
-  }
-
   const handleSelectSkillPath = async () => {
-    if (isTauri()) {
-      try {
-        const { open } = await import('@tauri-apps/plugin-dialog')
-        const selected = await open({ directory: true, multiple: false, title: '选择 Skill 库路径' })
-        if (selected) {
-          setSkillPath(selected as string)
-          setPathValid(true)
-        }
-      } catch (e) {
-        console.error('dialog error:', e)
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({ directory: true, multiple: false, title: '选择 Skill 库路径' })
+      if (selected) {
+        setSkillPath(selected as string)
+        setPathValid(true)
       }
+    } catch (e) {
+      console.error('dialog error:', e)
     }
   }
 
@@ -100,13 +81,11 @@ export default function Onboarding() {
   }
 
   const handleFinish = async () => {
-    if (isTauri()) {
-      await settingsApi.set('skills_lib_path', JSON.stringify(skillPath)).catch(console.error)
-      if (gitUrl) {
-        await settingsApi.set('git_repo_url', JSON.stringify(gitUrl)).catch(console.error)
-        await settingsApi.set('git_platform', JSON.stringify(gitPlatform)).catch(console.error)
-        await settingsApi.set('git_auth_type', JSON.stringify(authType)).catch(console.error)
-      }
+    await settingsApi.set('skills_lib_path', JSON.stringify(skillPath)).catch(console.error)
+    if (gitUrl) {
+      await settingsApi.set('git_repo_url', JSON.stringify(gitUrl)).catch(console.error)
+      await settingsApi.set('git_platform', JSON.stringify(gitPlatform)).catch(console.error)
+      await settingsApi.set('git_auth_type', JSON.stringify(authType)).catch(console.error)
     }
     completeOnboarding()
     navigate('/projects')

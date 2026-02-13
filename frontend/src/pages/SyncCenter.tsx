@@ -20,7 +20,7 @@ import { Progress } from '@/components/ui/progress'
 import { useSyncStore } from '@/stores/useSyncStore'
 import { cn, relativeTime, toolNames } from '@/lib/utils'
 import { toast } from 'sonner'
-import { isTauri, deploymentsApi } from '@/lib/tauri-api'
+import { deploymentsApi } from '@/lib/tauri-api'
 import type { ConsistencyDetailData } from '@/lib/tauri-api'
 import { useSkillStore } from '@/stores/useSkillStore'
 
@@ -40,35 +40,19 @@ export default function SyncCenter() {
     setChecking(true)
     setCheckProgress(10)
     try {
-      if (isTauri()) {
-        console.log('[SyncCenter] 开始一致性检查...')
-        setCheckProgress(30)
-        const report = await deploymentsApi.checkConsistency()
-        setCheckProgress(80)
-        console.log('[SyncCenter] 一致性检查结果:', JSON.stringify(report, null, 2))
-        await useSkillStore.getState().fetchDeployments()
-        setConsistencyDetails(report.details)
-        setCheckProgress(100)
-        setActiveTab('report')
-        if (report.diverged === 0 && report.missing === 0) {
-          toast.success(`一致性检查完成: ${report.total_deployments} 个部署全部同步 ✓`)
-        } else {
-          toast.warning(`发现 ${report.diverged} 个偏离, ${report.missing} 个缺失 (共 ${report.total_deployments} 个部署)`)
-        }
+      console.log('[SyncCenter] 开始一致性检查...')
+      setCheckProgress(30)
+      const report = await deploymentsApi.checkConsistency()
+      setCheckProgress(80)
+      console.log('[SyncCenter] 一致性检查结果:', JSON.stringify(report, null, 2))
+      await useSkillStore.getState().fetchDeployments()
+      setConsistencyDetails(report.details)
+      setCheckProgress(100)
+      setActiveTab('report')
+      if (report.diverged === 0 && report.missing === 0) {
+        toast.success(`一致性检查完成: ${report.total_deployments} 个部署全部同步 ✓`)
       } else {
-        const iv = setInterval(() => {
-          setCheckProgress((p) => {
-            if (p >= 100) {
-              clearInterval(iv)
-              setChecking(false)
-              setActiveTab('report')
-              toast.success('一致性检查完成')
-              return 100
-            }
-            return p + 5
-          })
-        }, 150)
-        return
+        toast.warning(`发现 ${report.diverged} 个偏离, ${report.missing} 个缺失 (共 ${report.total_deployments} 个部署)`)
       }
     } catch (e) {
       console.error('[SyncCenter] 一致性检查失败:', e)
@@ -102,7 +86,6 @@ export default function SyncCenter() {
   }
 
   const handleResyncDeployment = async (deploymentId: string) => {
-    if (!isTauri()) return
     setSyncingId(deploymentId)
     try {
       console.log(`[SyncCenter] 重新同步部署: ${deploymentId}`)
@@ -122,7 +105,6 @@ export default function SyncCenter() {
   }
 
   const handleDeleteDeployment = async (deploymentId: string) => {
-    if (!isTauri()) return
     try {
       console.log(`[SyncCenter] 删除部署记录: ${deploymentId}`)
       await deploymentsApi.delete(deploymentId)
@@ -136,7 +118,6 @@ export default function SyncCenter() {
   }
 
   const handleResolveAndSync = async (eventId: string, deploymentId: string) => {
-    if (!isTauri()) return
     try {
       await deploymentsApi.syncDeployment(deploymentId)
       resolveEvent(eventId)

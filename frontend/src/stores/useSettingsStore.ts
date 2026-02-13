@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import type { AppSettings } from '@/types'
-import { mockSettings } from '@/mock/data'
-import { isTauri, settingsApi } from '@/lib/tauri-api'
+import { settingsApi } from '@/lib/tauri-api'
 
 interface SettingsStore {
   settings: AppSettings
@@ -30,42 +29,38 @@ function parseSettingsFromRows(rows: { key: string; value: string | null }[]): P
   return mapped
 }
 
+const defaultSettings: AppSettings = {
+  language: 'zh-CN', theme: 'light', startup_page: 'projects', notifications_enabled: true,
+  skill_library_path: '~/.skills-manager/skills/', auto_export_frequency: 'daily',
+  file_watch_enabled: true, update_check_frequency: 'daily', auto_update: false, history_retention_days: 90,
+}
+
 export const useSettingsStore = create<SettingsStore>()((set) => ({
-  settings: mockSettings,
+  settings: defaultSettings,
   isLoading: false,
   fetchSettings: async () => {
     console.log('[SettingsStore] fetchSettings 开始')
     set({ isLoading: true })
     try {
-      if (isTauri()) {
-        const rows = await settingsApi.getAll()
-        console.log(`[SettingsStore] fetchSettings 完成: ${rows.length} 个设置项`)
-        const parsed = parseSettingsFromRows(rows)
-        set((s) => ({ settings: { ...s.settings, ...parsed }, isLoading: false }))
-      } else {
-        await new Promise((r) => setTimeout(r, 200))
-        console.log('[SettingsStore] fetchSettings: 使用 mock 数据')
-        set({ settings: mockSettings, isLoading: false })
-      }
+      const rows = await settingsApi.getAll()
+      console.log(`[SettingsStore] fetchSettings 完成: ${rows.length} 个设置项`)
+      const parsed = parseSettingsFromRows(rows)
+      set((s) => ({ settings: { ...s.settings, ...parsed }, isLoading: false }))
     } catch (e) {
       console.error('[SettingsStore] fetchSettings 失败:', e)
-      set({ settings: mockSettings, isLoading: false })
+      set({ isLoading: false })
     }
   },
   updateSetting: (key, value) => {
     console.log(`[SettingsStore] updateSetting: ${key} =`, value)
-    if (isTauri()) {
-      settingsApi.set(key, JSON.stringify(value)).catch((e) => console.error('[SettingsStore] updateSetting 失败:', e))
-    }
+    settingsApi.set(key, JSON.stringify(value)).catch((e) => console.error('[SettingsStore] updateSetting 失败:', e))
     set((s) => ({ settings: { ...s.settings, [key]: value } }))
   },
   updateSettings: (partial) => {
     console.log('[SettingsStore] updateSettings:', Object.keys(partial))
-    if (isTauri()) {
-      Object.entries(partial).forEach(([key, value]) => {
-        settingsApi.set(key, JSON.stringify(value)).catch((e) => console.error(`[SettingsStore] updateSettings ${key} 失败:`, e))
-      })
-    }
+    Object.entries(partial).forEach(([key, value]) => {
+      settingsApi.set(key, JSON.stringify(value)).catch((e) => console.error(`[SettingsStore] updateSettings ${key} 失败:`, e))
+    })
     set((s) => ({ settings: { ...s.settings, ...partial } }))
   },
 }))

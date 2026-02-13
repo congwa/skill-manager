@@ -9,7 +9,7 @@ import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
 import { cn, toolNames, sourceLabels } from '@/lib/utils'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { useProjectStore } from '@/stores/useProjectStore'
-import { isTauri, deploymentsApi } from '@/lib/tauri-api'
+import { deploymentsApi } from '@/lib/tauri-api'
 import { toast } from 'sonner'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -48,7 +48,7 @@ export default function SkillsStore() {
   const getDeployCount = (skillId: string) => deployments.filter((d) => d.skill_id === skillId).length
 
   const handleDeployConfirm = async () => {
-    if (!deployDialog || !selectedProject || !isTauri()) return
+    if (!deployDialog || !selectedProject) return
     setDeploying(deployDialog.skillId)
     try {
       console.log(`[SkillsStore] 部署 ${deployDialog.skillName} -> project=${selectedProject}, tool=${selectedTool}`)

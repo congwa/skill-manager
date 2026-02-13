@@ -17,7 +17,7 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { toast } from 'sonner'
-import { isTauri, skillsApi } from '@/lib/tauri-api'
+import { skillsApi } from '@/lib/tauri-api'
 
 export default function SkillEditor() {
   const { skillId } = useParams()
@@ -34,7 +34,7 @@ export default function SkillEditor() {
   const [loading, setLoading] = useState(true)
 
   useState(() => {
-    if (skill?.local_path && isTauri()) {
+    if (skill?.local_path) {
       const mdPath = skill.local_path + '/SKILL.md'
       skillsApi.readFile(mdPath).then((text) => {
         setContent(text)
@@ -61,7 +61,7 @@ export default function SkillEditor() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      if (isTauri() && skill?.local_path) {
+      if (skill?.local_path) {
         const mdPath = skill.local_path + '/SKILL.md'
         await skillsApi.writeFile(mdPath, content)
       }

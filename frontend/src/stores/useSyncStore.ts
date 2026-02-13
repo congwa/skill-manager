@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import type { ChangeEvent, SyncHistory, GitConfig } from '@/types'
-import { mockChangeEvents, mockSyncHistory, mockGitConfig } from '@/mock/data'
-import { isTauri, syncApi, settingsApi } from '@/lib/tauri-api'
+import { syncApi, settingsApi } from '@/lib/tauri-api'
 import type { ChangeEventRow, SyncHistoryRow, GitExportConfigRow } from '@/lib/tauri-api'
 
 function mapChangeEventRow(row: ChangeEventRow): ChangeEvent {
@@ -65,52 +64,34 @@ export const useSyncStore = create<SyncStore>()((set) => ({
   fetchChangeEvents: async () => {
     console.log('[SyncStore] fetchChangeEvents 开始')
     try {
-      if (isTauri()) {
-        const rows = await syncApi.getChangeEvents()
-        console.log(`[SyncStore] fetchChangeEvents 完成: ${rows.length} 个事件`)
-        set({ changeEvents: rows.map(mapChangeEventRow) })
-      } else {
-        await new Promise((r) => setTimeout(r, 300))
-        console.log('[SyncStore] fetchChangeEvents: 使用 mock 数据')
-        set({ changeEvents: mockChangeEvents })
-      }
+      const rows = await syncApi.getChangeEvents()
+      console.log(`[SyncStore] fetchChangeEvents 完成: ${rows.length} 个事件`)
+      set({ changeEvents: rows.map(mapChangeEventRow) })
     } catch (e) {
       console.error('[SyncStore] fetchChangeEvents 失败:', e)
-      set({ changeEvents: mockChangeEvents })
+      set({ changeEvents: [] })
     }
   },
   fetchSyncHistory: async () => {
     console.log('[SyncStore] fetchSyncHistory 开始')
     try {
-      if (isTauri()) {
-        const rows = await syncApi.getHistory(50)
-        console.log(`[SyncStore] fetchSyncHistory 完成: ${rows.length} 条记录`)
-        set({ syncHistory: rows.map(mapSyncHistoryRow) })
-      } else {
-        await new Promise((r) => setTimeout(r, 300))
-        console.log('[SyncStore] fetchSyncHistory: 使用 mock 数据')
-        set({ syncHistory: mockSyncHistory })
-      }
+      const rows = await syncApi.getHistory(50)
+      console.log(`[SyncStore] fetchSyncHistory 完成: ${rows.length} 条记录`)
+      set({ syncHistory: rows.map(mapSyncHistoryRow) })
     } catch (e) {
       console.error('[SyncStore] fetchSyncHistory 失败:', e)
-      set({ syncHistory: mockSyncHistory })
+      set({ syncHistory: [] })
     }
   },
   fetchGitConfig: async () => {
     console.log('[SyncStore] fetchGitConfig 开始')
     try {
-      if (isTauri()) {
-        const configs = await settingsApi.getGitConfigs()
-        console.log(`[SyncStore] fetchGitConfig 完成: ${configs.length} 个配置`)
-        set({ gitConfig: configs.length > 0 ? mapGitConfigRow(configs[0]) : null })
-      } else {
-        await new Promise((r) => setTimeout(r, 200))
-        console.log('[SyncStore] fetchGitConfig: 使用 mock 数据')
-        set({ gitConfig: mockGitConfig })
-      }
+      const configs = await settingsApi.getGitConfigs()
+      console.log(`[SyncStore] fetchGitConfig 完成: ${configs.length} 个配置`)
+      set({ gitConfig: configs.length > 0 ? mapGitConfigRow(configs[0]) : null })
     } catch (e) {
       console.error('[SyncStore] fetchGitConfig 失败:', e)
-      set({ gitConfig: mockGitConfig })
+      set({ gitConfig: null })
     }
   },
   runConsistencyCheck: async () => {
@@ -128,9 +109,7 @@ export const useSyncStore = create<SyncStore>()((set) => ({
   },
   resolveEvent: (id) => {
     console.log(`[SyncStore] resolveEvent: ${id}`)
-    if (isTauri()) {
-      syncApi.resolveEvent(id, 'conflict_resolved').catch((e) => console.error('[SyncStore] resolveEvent 失败:', e))
-    }
+    syncApi.resolveEvent(id, 'conflict_resolved').catch((e) => console.error('[SyncStore] resolveEvent 失败:', e))
     set((s) => ({
       changeEvents: s.changeEvents.map((e) =>
         e.id === id ? { ...e, status: 'resolved' as const } : e
@@ -139,9 +118,7 @@ export const useSyncStore = create<SyncStore>()((set) => ({
   },
   ignoreEvent: (id) => {
     console.log(`[SyncStore] ignoreEvent: ${id}`)
-    if (isTauri()) {
-      syncApi.resolveEvent(id, 'ignored').catch((e) => console.error('[SyncStore] ignoreEvent 失败:', e))
-    }
+    syncApi.resolveEvent(id, 'ignored').catch((e) => console.error('[SyncStore] ignoreEvent 失败:', e))
     set((s) => ({
       changeEvents: s.changeEvents.map((e) =>
         e.id === id ? { ...e, status: 'ignored' as const } : e

@@ -20,7 +20,7 @@ import { useSkillStore } from '@/stores/useSkillStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { cn, toolColors, toolNames, statusColors, sourceLabels, relativeTime } from '@/lib/utils'
 import { toast } from 'sonner'
-import { isTauri, skillsApi, deploymentsApi } from '@/lib/tauri-api'
+import { skillsApi, deploymentsApi } from '@/lib/tauri-api'
 
 export default function SkillDetail() {
   const { skillId } = useParams()
@@ -35,7 +35,7 @@ export default function SkillDetail() {
   const [skillFiles, setSkillFiles] = useState<string[]>([])
 
   useState(() => {
-    if (skill?.local_path && isTauri()) {
+    if (skill?.local_path) {
       skillsApi.readFile(skill.local_path + '/SKILL.md').then(setSkillContent).catch(() => {})
       skillsApi.listFiles(skill.local_path).then(setSkillFiles).catch(() => {})
     }
@@ -53,42 +53,32 @@ export default function SkillDetail() {
   const src = sourceLabels[skill.source]
 
   const handleSyncAll = async () => {
-    if (isTauri()) {
-      toast.loading('正在同步所有部署...')
-      try {
-        let totalFiles = 0
-        for (const dep of skillDeployments) {
-          console.log(`[SkillDetail] 同步部署: ${dep.id} -> ${dep.deploy_path}`)
-          const result = await deploymentsApi.syncDeployment(dep.id)
-          totalFiles += result.files_copied
-          console.log(`[SkillDetail] 同步完成: ${result.files_copied} 个文件, checksum ${result.old_checksum} -> ${result.new_checksum}`)
-        }
-        await useSkillStore.getState().fetchDeployments()
-        toast.success(`已同步 ${skillDeployments.length} 个部署，共 ${totalFiles} 个文件`)
-      } catch (e) {
-        console.error('[SkillDetail] sync error:', e)
-        toast.error('同步失败')
+    toast.loading('正在同步所有部署...')
+    try {
+      let totalFiles = 0
+      for (const dep of skillDeployments) {
+        console.log(`[SkillDetail] 同步部署: ${dep.id} -> ${dep.deploy_path}`)
+        const result = await deploymentsApi.syncDeployment(dep.id)
+        totalFiles += result.files_copied
+        console.log(`[SkillDetail] 同步完成: ${result.files_copied} 个文件, checksum ${result.old_checksum} -> ${result.new_checksum}`)
       }
-    } else {
-      toast.promise(new Promise((r) => setTimeout(r, 2000)), {
-        loading: '正在同步所有部署...',
-        success: `已同步 ${skillDeployments.length} 个部署`,
-        error: '同步失败',
-      })
+      await useSkillStore.getState().fetchDeployments()
+      toast.success(`已同步 ${skillDeployments.length} 个部署，共 ${totalFiles} 个文件`)
+    } catch (e) {
+      console.error('[SkillDetail] sync error:', e)
+      toast.error('同步失败')
     }
   }
 
   const handleDeleteSkill = async () => {
-    if (isTauri()) {
-      try {
-        await skillsApi.delete(skillId!)
-        await useSkillStore.getState().fetchSkills()
-        toast.success('Skill 已删除')
-        navigate('/skills')
-      } catch (e) {
-        console.error('delete error:', e)
-        toast.error('删除失败')
-      }
+    try {
+      await skillsApi.delete(skillId!)
+      await useSkillStore.getState().fetchSkills()
+      toast.success('Skill 已删除')
+      navigate('/skills')
+    } catch (e) {
+      console.error('delete error:', e)
+      toast.error('删除失败')
     }
   }
 

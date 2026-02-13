@@ -16,7 +16,7 @@ import { useSkillStore } from '@/stores/useSkillStore'
 import { cn, toolColors, toolNames, statusColors, relativeTime } from '@/lib/utils'
 import type { ToolName } from '@/types'
 import { toast } from 'sonner'
-import { isTauri, deploymentsApi } from '@/lib/tauri-api'
+import { deploymentsApi } from '@/lib/tauri-api'
 
 export default function ProjectDetail() {
   const { projectId } = useParams()
@@ -62,27 +62,19 @@ export default function ProjectDetail() {
 
   const handleConsistencyCheck = async () => {
     try {
-      if (isTauri()) {
-        toast.loading('正在检查一致性...')
-        console.log('[ProjectDetail] 开始一致性检查...')
-        const report = await deploymentsApi.checkConsistency()
-        console.log('[ProjectDetail] 一致性检查结果:', JSON.stringify(report, null, 2))
-        await useSkillStore.getState().fetchDeployments()
-        const projectDetails = report.details.filter((d) =>
-          projectDeployments.some((pd) => pd.id === d.deployment_id)
-        )
-        const projectDiverged = projectDetails.filter((d) => d.status !== 'synced')
-        if (projectDiverged.length === 0) {
-          toast.success(`所有 Skill 状态正常 ✓ (${projectDetails.length} 个部署已检查)`)
-        } else {
-          toast.warning(`发现 ${projectDiverged.length} 个偏离部署 (共 ${projectDetails.length} 个)`)
-        }
+      toast.loading('正在检查一致性...')
+      console.log('[ProjectDetail] 开始一致性检查...')
+      const report = await deploymentsApi.checkConsistency()
+      console.log('[ProjectDetail] 一致性检查结果:', JSON.stringify(report, null, 2))
+      await useSkillStore.getState().fetchDeployments()
+      const projectDetails = report.details.filter((d) =>
+        projectDeployments.some((pd) => pd.id === d.deployment_id)
+      )
+      const projectDiverged = projectDetails.filter((d) => d.status !== 'synced')
+      if (projectDiverged.length === 0) {
+        toast.success(`所有 Skill 状态正常 ✓ (${projectDetails.length} 个部署已检查)`)
       } else {
-        toast.promise(new Promise((r) => setTimeout(r, 2000)), {
-          loading: '正在检查一致性...',
-          success: '所有 Skill 状态正常 ✓',
-          error: '检查失败',
-        })
+        toast.warning(`发现 ${projectDiverged.length} 个偏离部署 (共 ${projectDetails.length} 个)`)
       }
     } catch (e) {
       console.error('[ProjectDetail] consistency check error:', e)

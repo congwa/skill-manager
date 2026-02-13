@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import type { Skill, SkillDeployment, SkillBackup } from '@/types'
-import { mockSkills, mockDeployments, mockBackups } from '@/mock/data'
-import { isTauri, skillsApi, deploymentsApi } from '@/lib/tauri-api'
+import { skillsApi, deploymentsApi } from '@/lib/tauri-api'
 import type { SkillRow, DeploymentRow, SkillBackupRow } from '@/lib/tauri-api'
 
 function mapSkillRow(row: SkillRow): Skill {
@@ -73,52 +72,34 @@ export const useSkillStore = create<SkillStore>()((set, get) => ({
     console.log('[SkillStore] fetchSkills 开始')
     set({ isLoading: true })
     try {
-      if (isTauri()) {
-        const rows = await skillsApi.getAll()
-        console.log(`[SkillStore] fetchSkills 完成: ${rows.length} 个 Skill`)
-        set({ skills: rows.map(mapSkillRow), isLoading: false })
-      } else {
-        await new Promise((r) => setTimeout(r, 400))
-        console.log('[SkillStore] fetchSkills: 使用 mock 数据')
-        set({ skills: mockSkills, isLoading: false })
-      }
+      const rows = await skillsApi.getAll()
+      console.log(`[SkillStore] fetchSkills 完成: ${rows.length} 个 Skill`)
+      set({ skills: rows.map(mapSkillRow), isLoading: false })
     } catch (e) {
       console.error('[SkillStore] fetchSkills 失败:', e)
-      set({ skills: mockSkills, isLoading: false })
+      set({ skills: [], isLoading: false })
     }
   },
   fetchDeployments: async () => {
     console.log('[SkillStore] fetchDeployments 开始')
     try {
-      if (isTauri()) {
-        const rows = await deploymentsApi.getAll()
-        console.log(`[SkillStore] fetchDeployments 完成: ${rows.length} 个部署`)
-        set({ deployments: rows.map(mapDeploymentRow) })
-      } else {
-        await new Promise((r) => setTimeout(r, 300))
-        console.log('[SkillStore] fetchDeployments: 使用 mock 数据')
-        set({ deployments: mockDeployments })
-      }
+      const rows = await deploymentsApi.getAll()
+      console.log(`[SkillStore] fetchDeployments 完成: ${rows.length} 个部署`)
+      set({ deployments: rows.map(mapDeploymentRow) })
     } catch (e) {
       console.error('[SkillStore] fetchDeployments 失败:', e)
-      set({ deployments: mockDeployments })
+      set({ deployments: [] })
     }
   },
   fetchBackups: async (skillId) => {
     console.log(`[SkillStore] fetchBackups: ${skillId}`)
     try {
-      if (isTauri()) {
-        const rows = await skillsApi.getBackups(skillId)
-        console.log(`[SkillStore] fetchBackups 完成: ${rows.length} 个备份`)
-        set({ backups: rows.map(mapBackupRow) })
-      } else {
-        await new Promise((r) => setTimeout(r, 300))
-        console.log('[SkillStore] fetchBackups: 使用 mock 数据')
-        set({ backups: mockBackups })
-      }
+      const rows = await skillsApi.getBackups(skillId)
+      console.log(`[SkillStore] fetchBackups 完成: ${rows.length} 个备份`)
+      set({ backups: rows.map(mapBackupRow) })
     } catch (e) {
       console.error('[SkillStore] fetchBackups 失败:', e)
-      set({ backups: mockBackups })
+      set({ backups: [] })
     }
   },
   getSkillById: (id) => get().skills.find((s) => s.id === id),

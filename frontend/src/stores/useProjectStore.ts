@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import type { Project } from '@/types'
-import { mockProjects } from '@/mock/data'
-import { isTauri, projectsApi, scannerApi } from '@/lib/tauri-api'
+import { projectsApi, scannerApi } from '@/lib/tauri-api'
 
 interface ProjectStore {
   projects: Project[]
@@ -43,29 +42,21 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     console.log('[ProjectStore] fetchProjects 开始')
     set({ isLoading: true })
     try {
-      if (isTauri()) {
-        const rows = await projectsApi.getAll()
-        console.log(`[ProjectStore] fetchProjects 完成: ${rows.length} 个项目`)
-        set({ projects: rows.map(mapRowToProject), isLoading: false })
-      } else {
-        await new Promise((r) => setTimeout(r, 600))
-        console.log('[ProjectStore] fetchProjects: 使用 mock 数据')
-        set({ projects: mockProjects, isLoading: false })
-      }
+      const rows = await projectsApi.getAll()
+      console.log(`[ProjectStore] fetchProjects 完成: ${rows.length} 个项目`)
+      set({ projects: rows.map(mapRowToProject), isLoading: false })
     } catch (e) {
       console.error('[ProjectStore] fetchProjects 失败:', e)
-      set({ projects: mockProjects, isLoading: false })
+      set({ projects: [], isLoading: false })
     }
   },
   addProject: (project) => set((s) => ({ projects: [...s.projects, project] })),
   addProjectByPath: async (path) => {
     console.log(`[ProjectStore] addProjectByPath: ${path}`)
     try {
-      if (isTauri()) {
-        const row = await projectsApi.add(path)
-        console.log(`[ProjectStore] addProjectByPath 成功: ${row.name} (${row.id})`)
-        set((s) => ({ projects: [...s.projects, mapRowToProject(row)] }))
-      }
+      const row = await projectsApi.add(path)
+      console.log(`[ProjectStore] addProjectByPath 成功: ${row.name} (${row.id})`)
+      set((s) => ({ projects: [...s.projects, mapRowToProject(row)] }))
     } catch (e) {
       console.error('[ProjectStore] addProjectByPath 失败:', e)
       throw e
@@ -73,9 +64,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
   },
   removeProject: (id) => {
     console.log(`[ProjectStore] removeProject: ${id}`)
-    if (isTauri()) {
-      projectsApi.remove(id).catch((e) => console.error('[ProjectStore] removeProject 失败:', e))
-    }
+    projectsApi.remove(id).catch((e) => console.error('[ProjectStore] removeProject 失败:', e))
     set((s) => ({ projects: s.projects.filter((p) => p.id !== id) }))
   },
   scanProject: async (id) => {
@@ -83,19 +72,12 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     set({ isScanning: true })
     try {
       const project = get().projects.find((p) => p.id === id)
-      if (isTauri() && project) {
+      if (project) {
         console.log(`[ProjectStore] scanProject: 扫描 ${project.path}`)
         const result = await scannerApi.scanAndImport(project.path)
         console.log(`[ProjectStore] scanProject 完成: 发现 ${result.skills.length} 个 Skill`)
         const rows = await projectsApi.getAll()
         set({ projects: rows.map(mapRowToProject), isScanning: false })
-      } else {
-        await new Promise((r) => setTimeout(r, 2000))
-        console.log('[ProjectStore] scanProject: mock 扫描')
-        const projects = get().projects.map((p) =>
-          p.id === id ? { ...p, last_scanned_at: new Date().toISOString() } : p
-        )
-        set({ projects, isScanning: false })
       }
     } catch (e) {
       console.error('[ProjectStore] scanProject 失败:', e)

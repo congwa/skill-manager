@@ -1,10 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
 
-// ── 环境检测 ──
-
-export const isTauri = () => {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-}
 
 // ── Projects ──
 

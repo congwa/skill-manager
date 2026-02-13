@@ -17,7 +17,7 @@ import { useProjectStore } from '@/stores/useProjectStore'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useSyncStore } from '@/stores/useSyncStore'
-import { isTauri, settingsApi, scannerApi, deploymentsApi } from '@/lib/tauri-api'
+import { settingsApi, scannerApi, deploymentsApi } from '@/lib/tauri-api'
 
 function App() {
   const onboardingCompleted = useUIStore((s) => s.onboardingCompleted)
@@ -37,40 +37,34 @@ function App() {
       const t0 = performance.now()
 
       try {
-        if (isTauri()) {
-          console.log('[App] 检测到 Tauri 环境')
+        console.log('[App] 1/5 检查应用初始化状态...')
+        const status = await settingsApi.getInitStatus()
+        console.log('[App] 初始化状态:', JSON.stringify(status, null, 2))
 
-          console.log('[App] 1/5 检查应用初始化状态...')
-          const status = await settingsApi.getInitStatus()
-          console.log('[App] 初始化状态:', JSON.stringify(status, null, 2))
-
-          if (!status.initialized) {
-            console.log('[App] 2/5 首次运行，执行应用初始化...')
-            const initResult = await settingsApi.initializeApp()
-            console.log('[App] 初始化完成:', JSON.stringify(initResult, null, 2))
-          } else {
-            console.log('[App] 2/5 应用已初始化，跳过')
-          }
-
-          console.log('[App] 3/5 扫描全局工具目录 Skill...')
-          const scanResult = await scannerApi.scanGlobalSkills().catch((e) => {
-            console.error('[App] 全局扫描失败:', e)
-            return null
-          })
-          if (scanResult) {
-            console.log(`[App] 全局扫描完成: 发现工具 [${scanResult.tools_found.join(', ')}], 新导入 ${scanResult.skills_imported} 个 Skill, 新建 ${scanResult.deployments_created} 个部署`)
-          }
-
-          console.log('[App] 4/5 全量对账: 检测磁盘与数据库一致性...')
-          const reconcileResult = await deploymentsApi.reconcile().catch((e) => {
-            console.error('[App] 对账失败:', e)
-            return null
-          })
-          if (reconcileResult) {
-            console.log(`[App] 对账完成: ${reconcileResult.deployments_checked} 已检查, ${reconcileResult.missing_detected} 缺失, ${reconcileResult.diverged_detected} 偏离, ${reconcileResult.untracked_found} 未跟踪, ${reconcileResult.change_events_created} 事件`)
-          }
+        if (!status.initialized) {
+          console.log('[App] 2/5 首次运行，执行应用初始化...')
+          const initResult = await settingsApi.initializeApp()
+          console.log('[App] 初始化完成:', JSON.stringify(initResult, null, 2))
         } else {
-          console.log('[App] 非 Tauri 环境，使用 mock 数据')
+          console.log('[App] 2/5 应用已初始化，跳过')
+        }
+
+        console.log('[App] 3/5 扫描全局工具目录 Skill...')
+        const scanResult = await scannerApi.scanGlobalSkills().catch((e) => {
+          console.error('[App] 全局扫描失败:', e)
+          return null
+        })
+        if (scanResult) {
+          console.log(`[App] 全局扫描完成: 发现工具 [${scanResult.tools_found.join(', ')}], 新导入 ${scanResult.skills_imported} 个 Skill, 新建 ${scanResult.deployments_created} 个部署`)
+        }
+
+        console.log('[App] 4/5 全量对账: 检测磁盘与数据库一致性...')
+        const reconcileResult = await deploymentsApi.reconcile().catch((e) => {
+          console.error('[App] 对账失败:', e)
+          return null
+        })
+        if (reconcileResult) {
+          console.log(`[App] 对账完成: ${reconcileResult.deployments_checked} 已检查, ${reconcileResult.missing_detected} 缺失, ${reconcileResult.diverged_detected} 偏离, ${reconcileResult.untracked_found} 未跟踪, ${reconcileResult.change_events_created} 事件`)
         }
       } catch (e) {
         console.error('[App] 初始化出错:', e)
