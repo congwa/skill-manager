@@ -15,11 +15,6 @@ pub struct Project {
     pub updated_at: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct AddProjectRequest {
-    pub path: String,
-}
-
 // ── Skills ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

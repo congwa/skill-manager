@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AppLayout } from '@/components/layout/AppLayout'
 import Onboarding from '@/pages/Onboarding'
@@ -12,9 +13,32 @@ import SyncCenter from '@/pages/SyncCenter'
 import UpdateManager from '@/pages/UpdateManager'
 import Settings from '@/pages/Settings'
 import { useUIStore } from '@/stores/useUIStore'
+import { useProjectStore } from '@/stores/useProjectStore'
+import { useSkillStore } from '@/stores/useSkillStore'
+import { useSettingsStore } from '@/stores/useSettingsStore'
+import { useSyncStore } from '@/stores/useSyncStore'
 
 function App() {
   const onboardingCompleted = useUIStore((s) => s.onboardingCompleted)
+  const initOnboarding = useUIStore((s) => s.initOnboardingState)
+  const fetchProjects = useProjectStore((s) => s.fetchProjects)
+  const fetchSkills = useSkillStore((s) => s.fetchSkills)
+  const fetchDeployments = useSkillStore((s) => s.fetchDeployments)
+  const fetchSettings = useSettingsStore((s) => s.fetchSettings)
+  const fetchChangeEvents = useSyncStore((s) => s.fetchChangeEvents)
+  const fetchSyncHistory = useSyncStore((s) => s.fetchSyncHistory)
+  const fetchGitConfig = useSyncStore((s) => s.fetchGitConfig)
+
+  useEffect(() => {
+    initOnboarding()
+    fetchProjects()
+    fetchSkills()
+    fetchDeployments()
+    fetchSettings()
+    fetchChangeEvents()
+    fetchSyncHistory()
+    fetchGitConfig()
+  }, [])
 
   return (
     <BrowserRouter>

@@ -98,6 +98,9 @@ export const skillsApi = {
   delete: (skillId: string) => invoke<void>('delete_skill', { skillId }),
   getSource: (skillId: string) => invoke<SkillSourceRow | null>('get_skill_source', { skillId }),
   getBackups: (skillId: string) => invoke<SkillBackupRow[]>('get_skill_backups', { skillId }),
+  readFile: (filePath: string) => invoke<string>('read_skill_file', { filePath }),
+  writeFile: (filePath: string, content: string) => invoke<void>('write_skill_file', { filePath, content }),
+  listFiles: (dirPath: string) => invoke<string[]>('list_skill_files', { dirPath }),
 }
 
 // ── Deployments ──

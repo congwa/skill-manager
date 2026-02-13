@@ -29,6 +29,7 @@ import { useProjectStore } from '@/stores/useProjectStore'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { cn, toolColors, toolNames, relativeTime } from '@/lib/utils'
 import type { ToolName } from '@/types'
+import { isTauri } from '@/lib/tauri-api'
 
 const statLabels: Record<string, { bg: string; text: string; label: string }> = {
   synced: { bg: 'bg-mint-100', text: 'text-mint-500', label: '已同步' },
@@ -60,14 +61,39 @@ export default function ProjectList() {
     })
 
   const handleDelete = () => {
-    if (deleteId) { removeProject(deleteId); setDeleteId(null) }
+    if (deleteId) {
+      removeProject(deleteId)
+      setDeleteId(null)
+    }
   }
 
-  const handleAddScan = () => {
-    setScanning(true); setScanProgress(0)
-    const iv = setInterval(() => {
-      setScanProgress((p) => { if (p >= 100) { clearInterval(iv); setScanning(false); setAddOpen(false); return 100 }; return p + 25 })
-    }, 500)
+  const handleRescan = async (projectId: string) => {
+    await useProjectStore.getState().scanProject(projectId)
+  }
+
+  const handleAddScan = async () => {
+    if (isTauri()) {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog')
+        const selected = await open({ directory: true, multiple: false, title: '选择项目目录' })
+        if (selected) {
+          setScanning(true); setScanProgress(30)
+          await useProjectStore.getState().addProjectByPath(selected as string)
+          setScanProgress(70)
+          await useProjectStore.getState().scanProject(useProjectStore.getState().projects[useProjectStore.getState().projects.length - 1]?.id || '')
+          setScanProgress(100)
+          setScanning(false); setAddOpen(false)
+        }
+      } catch (e) {
+        console.error('add project error:', e)
+        setScanning(false)
+      }
+    } else {
+      setScanning(true); setScanProgress(0)
+      const iv = setInterval(() => {
+        setScanProgress((p) => { if (p >= 100) { clearInterval(iv); setScanning(false); setAddOpen(false); return 100 }; return p + 25 })
+      }, 500)
+    }
   }
 
   const statCards = [
@@ -182,7 +208,7 @@ export default function ProjectList() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent>
-                            <DropdownMenuItem><RefreshCw className="h-4 w-4 mr-2" /> 重新扫描</DropdownMenuItem>
+                            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleRescan(project.id) }}><RefreshCw className="h-4 w-4 mr-2" /> 重新扫描</DropdownMenuItem>
                             <DropdownMenuItem className="text-strawberry-500" onClick={(e) => { e.stopPropagation(); setDeleteId(project.id) }}>
                               <Trash2 className="h-4 w-4 mr-2" /> 删除项目
                             </DropdownMenuItem>

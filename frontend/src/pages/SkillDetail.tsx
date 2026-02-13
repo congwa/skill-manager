@@ -20,6 +20,7 @@ import { useSkillStore } from '@/stores/useSkillStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { cn, toolColors, toolNames, statusColors, sourceLabels, relativeTime } from '@/lib/utils'
 import { toast } from 'sonner'
+import { isTauri, skillsApi, deploymentsApi } from '@/lib/tauri-api'
 
 export default function SkillDetail() {
   const { skillId } = useParams()
@@ -30,6 +31,15 @@ export default function SkillDetail() {
   const skillDeployments = deployments.filter((d) => d.skill_id === skillId)
   const skillBackups = backups.filter((b) => b.skill_id === skillId)
   const [activeTab, setActiveTab] = useState('content')
+  const [skillContent, setSkillContent] = useState<string | null>(null)
+  const [skillFiles, setSkillFiles] = useState<string[]>([])
+
+  useState(() => {
+    if (skill?.local_path && isTauri()) {
+      skillsApi.readFile(skill.local_path + '/SKILL.md').then(setSkillContent).catch(() => {})
+      skillsApi.listFiles(skill.local_path).then(setSkillFiles).catch(() => {})
+    }
+  })
 
   if (!skill) {
     return (
@@ -42,12 +52,40 @@ export default function SkillDetail() {
 
   const src = sourceLabels[skill.source]
 
-  const handleSyncAll = () => {
-    toast.promise(new Promise((r) => setTimeout(r, 2000)), {
-      loading: '正在同步所有部署...',
-      success: `已同步 ${skillDeployments.length} 个部署`,
-      error: '同步失败',
-    })
+  const handleSyncAll = async () => {
+    if (isTauri()) {
+      toast.loading('正在同步所有部署...')
+      try {
+        for (const dep of skillDeployments) {
+          await deploymentsApi.updateStatus(dep.id, 'synced', skill.checksum)
+        }
+        await useSkillStore.getState().fetchDeployments()
+        toast.success(`已同步 ${skillDeployments.length} 个部署`)
+      } catch (e) {
+        console.error('sync error:', e)
+        toast.error('同步失败')
+      }
+    } else {
+      toast.promise(new Promise((r) => setTimeout(r, 2000)), {
+        loading: '正在同步所有部署...',
+        success: `已同步 ${skillDeployments.length} 个部署`,
+        error: '同步失败',
+      })
+    }
+  }
+
+  const handleDeleteSkill = async () => {
+    if (isTauri()) {
+      try {
+        await skillsApi.delete(skillId!)
+        await useSkillStore.getState().fetchSkills()
+        toast.success('Skill 已删除')
+        navigate('/skills')
+      } catch (e) {
+        console.error('delete error:', e)
+        toast.error('删除失败')
+      }
+    }
   }
 
   return (
@@ -91,7 +129,7 @@ export default function SkillDetail() {
             <DropdownMenuContent>
               <DropdownMenuItem><Download className="h-4 w-4 mr-2" /> 检查更新</DropdownMenuItem>
               <DropdownMenuItem><Clock className="h-4 w-4 mr-2" /> 版本回滚</DropdownMenuItem>
-              <DropdownMenuItem className="text-strawberry-500"><Trash2 className="h-4 w-4 mr-2" /> 删除</DropdownMenuItem>
+              <DropdownMenuItem className="text-strawberry-500" onClick={handleDeleteSkill}><Trash2 className="h-4 w-4 mr-2" /> 删除</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -144,8 +182,19 @@ export default function SkillDetail() {
                   </div>
                 )}
 
+                {skillFiles.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-xs text-cream-500 mb-2">文件列表 ({skillFiles.length})</p>
+                    <div className="bg-cream-50 rounded-xl p-3 space-y-1">
+                      {skillFiles.map((f) => (
+                        <p key={f} className="text-xs text-cream-600 font-mono">{f}</p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="mt-6 bg-cream-50 rounded-xl p-4 font-mono text-sm text-cream-700 whitespace-pre-wrap leading-relaxed">
-                  {`---\nname: ${skill.name}\ndescription: ${skill.description}\nversion: ${skill.version}\n---\n\n# ${skill.name}\n\n${skill.description}\n\n这是 Skill 内容的预览区域。实际内容将从 SKILL.md 文件中读取。`}
+                  {skillContent || `---\nname: ${skill.name}\ndescription: ${skill.description}\nversion: ${skill.version}\n---\n\n# ${skill.name}\n\n${skill.description}`}
                 </div>
               </CardContent>
             </Card>

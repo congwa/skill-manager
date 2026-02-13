@@ -16,6 +16,7 @@ import { useSkillStore } from '@/stores/useSkillStore'
 import { cn, toolColors, toolNames, statusColors, relativeTime } from '@/lib/utils'
 import type { ToolName } from '@/types'
 import { toast } from 'sonner'
+import { isTauri, deploymentsApi } from '@/lib/tauri-api'
 
 export default function ProjectDetail() {
   const { projectId } = useParams()
@@ -45,17 +46,42 @@ export default function ProjectDetail() {
 
   const toggleTool = (tool: string) => setOpenTools((prev) => ({ ...prev, [tool]: !prev[tool] }))
 
-  const handleScan = () => {
+  const handleScan = async () => {
     setScanning(true)
-    setTimeout(() => { setScanning(false); toast.success('扫描完成') }, 2000)
+    try {
+      await useProjectStore.getState().scanProject(projectId!)
+      await useSkillStore.getState().fetchDeployments()
+      toast.success('扫描完成')
+    } catch (e) {
+      console.error('scan error:', e)
+      toast.error('扫描失败')
+    } finally {
+      setScanning(false)
+    }
   }
 
-  const handleConsistencyCheck = () => {
-    toast.promise(new Promise((r) => setTimeout(r, 2000)), {
-      loading: '正在检查一致性...',
-      success: '所有 Skill 状态正常 ✓',
-      error: '检查失败',
-    })
+  const handleConsistencyCheck = async () => {
+    try {
+      if (isTauri()) {
+        toast.loading('正在检查一致性...')
+        const diverged = await deploymentsApi.getDiverged()
+        const projectDiverged = diverged.filter((d) => d.project_id === projectId)
+        if (projectDiverged.length === 0) {
+          toast.success('所有 Skill 状态正常 ✓')
+        } else {
+          toast.warning(`发现 ${projectDiverged.length} 个偏离部署`)
+        }
+      } else {
+        toast.promise(new Promise((r) => setTimeout(r, 2000)), {
+          loading: '正在检查一致性...',
+          success: '所有 Skill 状态正常 ✓',
+          error: '检查失败',
+        })
+      }
+    } catch (e) {
+      console.error('consistency check error:', e)
+      toast.error('检查失败')
+    }
   }
 
   return (

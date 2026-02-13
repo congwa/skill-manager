@@ -22,8 +22,7 @@ import { cn, relativeTime, toolNames } from '@/lib/utils'
 import { toast } from 'sonner'
 
 export default function SyncCenter() {
-  const { changeEvents, syncHistory, gitConfig: _gitConfig, resolveEvent, ignoreEvent } = useSyncStore()
-  const gitConfig = _gitConfig!
+  const { changeEvents, syncHistory, gitConfig, resolveEvent, ignoreEvent } = useSyncStore()
   const [activeTab, setActiveTab] = useState('events')
   const [eventStatusFilter, setEventStatusFilter] = useState('all')
   const [eventTypeFilter, setEventTypeFilter] = useState('all')
@@ -50,8 +49,8 @@ export default function SyncCenter() {
   }
 
   const statCards = [
-    { label: 'Git 连接', value: gitConfig.connected ? '已连接' : '未配置', icon: GitBranch, bg: 'bg-mint-50', color: gitConfig.connected ? 'text-mint-500' : 'text-cream-500' },
-    { label: '最近导出', value: gitConfig.last_export_at ? relativeTime(gitConfig.last_export_at) : '从未', icon: CloudUpload, bg: 'bg-lavender-50', color: 'text-lavender-400' },
+    { label: 'Git 连接', value: gitConfig?.connected ? '已连接' : '未配置', icon: GitBranch, bg: 'bg-mint-50', color: gitConfig?.connected ? 'text-mint-500' : 'text-cream-500' },
+    { label: '最近导出', value: gitConfig?.last_export_at ? relativeTime(gitConfig.last_export_at) : '从未', icon: CloudUpload, bg: 'bg-lavender-50', color: 'text-lavender-400' },
     { label: '待处理变更', value: `${pendingCount}`, icon: BellRing, bg: 'bg-honey-50', color: pendingCount > 0 ? 'text-honey-500' : 'text-cream-500' },
     { label: '偏离部署', value: '2', icon: AlertTriangle, bg: 'bg-strawberry-50', color: 'text-strawberry-500' },
   ]
@@ -257,7 +256,7 @@ export default function SyncCenter() {
           <AlertDialogHeader>
             <AlertDialogTitle>备份导出到 Git</AlertDialogTitle>
             <AlertDialogDescription>
-              将把所有 Skill 导出到 {gitConfig.repo_url}（{gitConfig.branch} 分支）
+              将把所有 Skill 导出到 {gitConfig?.repo_url || '未配置'}（{gitConfig?.branch || 'main'} 分支）
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

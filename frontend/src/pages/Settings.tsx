@@ -24,6 +24,7 @@ import { cn, toolColors, toolNames } from '@/lib/utils'
 import type { ToolName } from '@/types'
 import { toast } from 'sonner'
 import { useTheme } from 'next-themes'
+import { isTauri, settingsApi } from '@/lib/tauri-api'
 
 const sections = [
   { id: 'general', label: '通用', icon: SettingsIcon },
@@ -52,6 +53,53 @@ export default function Settings() {
   const showSaved = (field: string) => {
     setSavedField(field)
     setTimeout(() => setSavedField(null), 1500)
+  }
+
+  const handleSelectSkillLibPath = async () => {
+    if (isTauri()) {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog')
+        const selected = await open({ directory: true, multiple: false, title: '选择 Skill 库路径' })
+        if (selected) {
+          updateSettings({ skill_library_path: selected as string })
+        }
+      } catch (e) {
+        console.error('dialog error:', e)
+      }
+    }
+  }
+
+  const handleSelectBackupPath = async () => {
+    if (isTauri()) {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog')
+        const selected = await open({ directory: true, multiple: false, title: '选择备份目录' })
+        if (selected) {
+          await settingsApi.set('backup_dir', selected as string)
+          toast.success('备份目录已更新')
+        }
+      } catch (e) {
+        console.error('dialog error:', e)
+      }
+    }
+  }
+
+  const handleSaveGitConfig = async () => {
+    if (isTauri()) {
+      try {
+        await settingsApi.saveGitConfig({
+          provider: gitPlatform,
+          remoteUrl: gitUrl,
+          authType: authType,
+          branch: 'main',
+          autoExport: 'manual',
+        })
+        toast.success('Git 配置已保存')
+      } catch (e) {
+        console.error('save git config error:', e)
+        toast.error('保存失败')
+      }
+    }
   }
 
   const handleTestConnection = () => {
@@ -156,7 +204,7 @@ export default function Settings() {
                 <div className="flex items-center gap-2">
                   <Label className="shrink-0">库路径</Label>
                   <Input value={settings.skill_library_path} onChange={(e) => updateSettings({ skill_library_path: e.target.value })} className="flex-1" />
-                  <Button variant="outline" size="sm"><Folder className="h-4 w-4 mr-1" /> 浏览</Button>
+                  <Button variant="outline" size="sm" onClick={handleSelectSkillLibPath}><Folder className="h-4 w-4 mr-1" /> 浏览</Button>
                 </div>
                 <div className="grid grid-cols-3 gap-4 p-4 bg-cream-50 rounded-xl">
                   <div><p className="text-xs text-cream-500">Skill 数量</p><p className="font-bold text-cream-800">8</p></div>
@@ -194,6 +242,7 @@ export default function Settings() {
                     <Label>导出分支</Label>
                     <Input defaultValue="main" className="w-32" />
                   </div>
+                  <Button variant="outline" size="sm" onClick={handleSaveGitConfig} className="w-full mb-2">保存配置</Button>
                   <Button variant="outline" size="sm" onClick={handleTestConnection} disabled={testing} className={cn(
                     'w-full',
                     testResult === 'success' && 'border-mint-400 text-mint-500',
@@ -296,7 +345,7 @@ export default function Settings() {
                 <div className="flex items-center gap-2">
                   <Label className="shrink-0">备份目录</Label>
                   <Input defaultValue="~/.skills-manager/backups/" className="flex-1" />
-                  <Button variant="outline" size="sm"><Folder className="h-4 w-4 mr-1" /> 浏览</Button>
+                  <Button variant="outline" size="sm" onClick={handleSelectBackupPath}><Folder className="h-4 w-4 mr-1" /> 浏览</Button>
                 </div>
                 <div className="flex items-center gap-2">
                   <Label className="shrink-0">历史记录保留</Label>

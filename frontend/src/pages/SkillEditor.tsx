@@ -17,6 +17,7 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { toast } from 'sonner'
+import { isTauri, skillsApi } from '@/lib/tauri-api'
 
 export default function SkillEditor() {
   const { skillId } = useParams()
@@ -24,14 +25,29 @@ export default function SkillEditor() {
   const skill = useSkillStore((s) => s.skills.find((sk) => sk.id === skillId))
   const [description, setDescription] = useState(skill?.description || '')
   const [version, setVersion] = useState(skill?.version || '')
-  const [content, setContent] = useState(
-    `---\nname: ${skill?.name || ''}\ndescription: ${skill?.description || ''}\nversion: ${skill?.version || ''}\n---\n\n# ${skill?.name || ''}\n\n${skill?.description || ''}\n\n这里是 Skill 的详细内容...\n\n## 使用方法\n\n1. 按照说明配置\n2. 在项目中使用\n`
-  )
+  const [content, setContent] = useState('')
   const [showPreview, setShowPreview] = useState(true)
   const [saving, setSaving] = useState(false)
   const [discardOpen, setDiscardOpen] = useState(false)
   const [frontmatterOpen, setFrontmatterOpen] = useState(true)
   const [hasChanges, setHasChanges] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  useState(() => {
+    if (skill?.local_path && isTauri()) {
+      const mdPath = skill.local_path + '/SKILL.md'
+      skillsApi.readFile(mdPath).then((text) => {
+        setContent(text)
+        setLoading(false)
+      }).catch(() => {
+        setContent(`---\nname: ${skill.name}\ndescription: ${skill.description}\nversion: ${skill.version}\n---\n\n# ${skill.name}\n\n${skill.description}\n`)
+        setLoading(false)
+      })
+    } else {
+      setContent(`---\nname: ${skill?.name || ''}\ndescription: ${skill?.description || ''}\nversion: ${skill?.version || ''}\n---\n\n# ${skill?.name || ''}\n\n${skill?.description || ''}\n`)
+      setLoading(false)
+    }
+  })
 
   if (!skill) {
     return (
@@ -44,10 +60,19 @@ export default function SkillEditor() {
 
   const handleSave = async () => {
     setSaving(true)
-    await new Promise((r) => setTimeout(r, 1000))
-    setSaving(false)
-    setHasChanges(false)
-    toast.success('保存成功')
+    try {
+      if (isTauri() && skill?.local_path) {
+        const mdPath = skill.local_path + '/SKILL.md'
+        await skillsApi.writeFile(mdPath, content)
+      }
+      setSaving(false)
+      setHasChanges(false)
+      toast.success('保存成功')
+    } catch (e) {
+      console.error('save error:', e)
+      setSaving(false)
+      toast.error('保存失败')
+    }
   }
 
   const handleDiscard = () => {

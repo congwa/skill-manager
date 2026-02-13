@@ -9,6 +9,9 @@ import { Progress } from '@/components/ui/progress'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { useUIStore } from '@/stores/useUIStore'
+import { useProjectStore } from '@/stores/useProjectStore'
+import { isTauri, settingsApi, scannerApi } from '@/lib/tauri-api'
+import type { ScanResultData } from '@/lib/tauri-api'
 
 const steps = ['欢迎', '选择路径', '导入项目', 'Git 配置']
 
@@ -19,6 +22,7 @@ export default function Onboarding() {
   const [scanning, setScanning] = useState(false)
   const [scanProgress, setScanProgress] = useState(0)
   const [scanned, setScanned] = useState(false)
+  const [scanResult, setScanResult] = useState<ScanResultData | null>(null)
   const [gitPlatform, setGitPlatform] = useState('github')
   const [gitUrl, setGitUrl] = useState('')
   const [authType, setAuthType] = useState('ssh')
@@ -26,7 +30,44 @@ export default function Onboarding() {
   const [testResult, setTestResult] = useState<'success' | 'fail' | null>(null)
   const navigate = useNavigate()
   const completeOnboarding = useUIStore((s) => s.completeOnboarding)
-  const handleScan = () => {
+  const fetchProjects = useProjectStore((s) => s.fetchProjects)
+
+  const handleSelectFolder = async () => {
+    if (isTauri()) {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog')
+        const selected = await open({ directory: true, multiple: false, title: '选择项目目录' })
+        if (selected) {
+          handleScanPath(selected as string)
+        }
+      } catch (e) {
+        console.error('dialog error:', e)
+      }
+    } else {
+      handleScanMock()
+    }
+  }
+
+  const handleScanPath = async (projectPath: string) => {
+    setScanning(true)
+    setScanProgress(20)
+    try {
+      if (isTauri()) {
+        setScanProgress(50)
+        const result = await scannerApi.scanAndImport(projectPath)
+        setScanResult(result)
+        setScanProgress(100)
+        setScanned(true)
+        await fetchProjects()
+      }
+    } catch (e) {
+      console.error('scan error:', e)
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  const handleScanMock = () => {
     setScanning(true)
     setScanProgress(0)
     const interval = setInterval(() => {
@@ -37,13 +78,36 @@ export default function Onboarding() {
     }, 400)
   }
 
+  const handleSelectSkillPath = async () => {
+    if (isTauri()) {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog')
+        const selected = await open({ directory: true, multiple: false, title: '选择 Skill 库路径' })
+        if (selected) {
+          setSkillPath(selected as string)
+          setPathValid(true)
+        }
+      } catch (e) {
+        console.error('dialog error:', e)
+      }
+    }
+  }
+
   const handleTestConnection = () => {
     setTesting(true)
     setTestResult(null)
     setTimeout(() => { setTesting(false); setTestResult('success') }, 1500)
   }
 
-  const handleFinish = () => {
+  const handleFinish = async () => {
+    if (isTauri()) {
+      await settingsApi.set('skills_lib_path', JSON.stringify(skillPath)).catch(console.error)
+      if (gitUrl) {
+        await settingsApi.set('git_repo_url', JSON.stringify(gitUrl)).catch(console.error)
+        await settingsApi.set('git_platform', JSON.stringify(gitPlatform)).catch(console.error)
+        await settingsApi.set('git_auth_type', JSON.stringify(authType)).catch(console.error)
+      }
+    }
     completeOnboarding()
     navigate('/projects')
   }
@@ -103,7 +167,7 @@ export default function Onboarding() {
               <div className="flex gap-2">
                 <Input id="path" value={skillPath} onChange={(e) => { setSkillPath(e.target.value); setPathValid(e.target.value.length > 0) }}
                   className={`flex-1 ${pathValid ? 'border-cream-300' : 'border-strawberry-400'}`} />
-                <Button variant="outline" onClick={() => setPathValid(true)}>
+                <Button variant="outline" onClick={handleSelectSkillPath}>
                   <FolderOpen className="h-4 w-4 mr-1" /> 选择
                 </Button>
               </div>
@@ -128,7 +192,7 @@ export default function Onboarding() {
                     className="border-2 border-dashed border-cream-300 rounded-xl p-12 text-center cursor-pointer hover:border-peach-300 hover:bg-peach-50/50 transition-all"
                     animate={{ borderColor: ['#F0E0D4', '#FFB694', '#F0E0D4'] }}
                     transition={{ duration: 3, repeat: Infinity }}
-                    onClick={handleScan}
+                    onClick={handleSelectFolder}
                   >
                     <FolderOpen className="h-12 w-12 text-cream-400 mx-auto mb-4" />
                     <p className="text-cream-600">拖拽文件夹到此处或点击选择</p>
@@ -145,14 +209,15 @@ export default function Onboarding() {
               <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-card rounded-xl p-6 shadow-card space-y-3">
                 <div className="flex items-center gap-2">
                   <Check className="h-5 w-5 text-mint-500" />
-                  <span className="font-semibold text-cream-800">GitPulse</span>
+                  <span className="font-semibold text-cream-800">{scanResult?.project_name || '项目'}</span>
                 </div>
-                <p className="text-xs text-cream-500">/Users/wang/code/my/GitPulse</p>
+                <p className="text-xs text-cream-500">{scanResult?.project_path || ''}</p>
                 <div className="flex gap-2">
-                  <span className="text-xs bg-sky-100 text-sky-500 px-2 py-0.5 rounded-full">Windsurf</span>
-                  <span className="text-xs bg-lavender-100 text-lavender-400 px-2 py-0.5 rounded-full">Cursor</span>
+                  {(scanResult?.tools || []).map((tool) => (
+                    <span key={tool} className="text-xs bg-sky-100 text-sky-500 px-2 py-0.5 rounded-full">{tool}</span>
+                  ))}
                 </div>
-                <p className="text-sm text-cream-700">发现 5 个 Skill</p>
+                <p className="text-sm text-cream-700">发现 {scanResult?.skills.length || 0} 个 Skill</p>
               </motion.div>
             )}
             <div className="flex justify-between">

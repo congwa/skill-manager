@@ -186,3 +186,41 @@ pub async fn get_skill_backups(
 }
 
 use rusqlite::OptionalExtension;
+
+#[tauri::command]
+pub async fn read_skill_file(file_path: String) -> Result<String, AppError> {
+    let path = std::path::Path::new(&file_path);
+    if !path.exists() {
+        return Err(AppError::NotFound(format!("文件不存在: {}", file_path)));
+    }
+    let content = std::fs::read_to_string(path)?;
+    Ok(content)
+}
+
+#[tauri::command]
+pub async fn write_skill_file(file_path: String, content: String) -> Result<(), AppError> {
+    let path = std::path::Path::new(&file_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, content)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_skill_files(dir_path: String) -> Result<Vec<String>, AppError> {
+    let path = std::path::Path::new(&dir_path);
+    if !path.exists() || !path.is_dir() {
+        return Ok(vec![]);
+    }
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            if let Ok(rel) = entry.path().strip_prefix(path) {
+                files.push(rel.to_string_lossy().to_string());
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}

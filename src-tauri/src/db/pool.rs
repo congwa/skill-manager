@@ -1,4 +1,4 @@
-use r2d2::{Pool, PooledConnection};
+use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::OpenFlags;
 use std::path::Path;
@@ -7,7 +7,6 @@ use crate::db::migrations;
 use crate::error::AppError;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
-pub type DbConn = PooledConnection<SqliteConnectionManager>;
 
 pub fn create_pool(db_path: &Path) -> Result<DbPool, AppError> {
     if let Some(parent) = db_path.parent() {

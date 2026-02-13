@@ -23,6 +23,7 @@ pub enum AppError {
     #[error("Validation error: {0}")]
     Validation(String),
 
+    #[allow(dead_code)]
     #[error("Internal error: {0}")]
     Internal(String),
 }

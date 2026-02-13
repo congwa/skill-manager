@@ -28,6 +28,9 @@ pub fn run() {
             commands::skills::delete_skill,
             commands::skills::get_skill_source,
             commands::skills::get_skill_backups,
+            commands::skills::read_skill_file,
+            commands::skills::write_skill_file,
+            commands::skills::list_skill_files,
             // Deployments
             commands::deployments::get_deployments,
             commands::deployments::get_skill_deployments,
