@@ -11,6 +11,7 @@ use crate::models::{AppSetting, GitExportConfig, ChangeEvent, SyncHistoryEntry};
 
 #[tauri::command]
 pub async fn get_all_settings(pool: State<'_, DbPool>) -> Result<Vec<AppSetting>, AppError> {
+    info!("[get_all_settings] 查询所有设置");
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
         "SELECT key, value, updated_at FROM app_settings ORDER BY key"
@@ -29,6 +30,7 @@ pub async fn get_all_settings(pool: State<'_, DbPool>) -> Result<Vec<AppSetting>
 
 #[tauri::command]
 pub async fn get_setting(key: String, pool: State<'_, DbPool>) -> Result<Option<String>, AppError> {
+    info!("[get_setting] 查询设置: {}", key);
     let conn = pool.get()?;
     let value: Option<String> = conn
         .query_row(
@@ -47,6 +49,7 @@ pub async fn set_setting(
     value: String,
     pool: State<'_, DbPool>,
 ) -> Result<(), AppError> {
+    info!("[set_setting] 设置: {} = {}", key, value);
     let conn = pool.get()?;
     conn.execute(
         "INSERT INTO app_settings (key, value, updated_at)
@@ -63,6 +66,7 @@ pub async fn set_setting(
 pub async fn get_git_export_configs(
     pool: State<'_, DbPool>,
 ) -> Result<Vec<GitExportConfig>, AppError> {
+    info!("[get_git_export_configs] 查询 Git 导出配置");
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
         "SELECT id, provider, remote_url, auth_type, branch, auto_export,
@@ -97,6 +101,7 @@ pub async fn save_git_export_config(
     auto_export: String,
     pool: State<'_, DbPool>,
 ) -> Result<GitExportConfig, AppError> {
+    info!("[save_git_export_config] 保存 Git 配置: provider={}, url={}", provider, remote_url);
     let conn = pool.get()?;
     let id = Uuid::new_v4().to_string();
 

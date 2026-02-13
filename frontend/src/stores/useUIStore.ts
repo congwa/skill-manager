@@ -38,19 +38,24 @@ export const useUIStore = create<UIStore>()((set) => ({
   },
   removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   completeOnboarding: () => {
+    console.log('[UIStore] completeOnboarding')
     if (isTauri()) {
-      settingsApi.set('onboarding_completed', 'true').catch(console.error)
+      settingsApi.set('onboarding_completed', 'true').catch((e) => console.error('[UIStore] completeOnboarding 失败:', e))
     }
     set({ onboardingCompleted: true })
   },
   initOnboardingState: async () => {
+    console.log('[UIStore] initOnboardingState 开始')
     try {
       if (isTauri()) {
         const val = await settingsApi.get('onboarding_completed')
+        console.log(`[UIStore] initOnboardingState: onboarding_completed = ${val}`)
         set({ onboardingCompleted: val === 'true' })
+      } else {
+        console.log('[UIStore] initOnboardingState: 非 Tauri 环境，使用默认值')
       }
     } catch (e) {
-      console.error('initOnboardingState error:', e)
+      console.error('[UIStore] initOnboardingState 失败:', e)
     }
   },
 }))

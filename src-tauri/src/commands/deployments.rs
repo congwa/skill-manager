@@ -1,3 +1,4 @@
+use log::info;
 use rusqlite::params;
 use tauri::State;
 use uuid::Uuid;
@@ -8,6 +9,7 @@ use crate::models::SkillDeployment;
 
 #[tauri::command]
 pub async fn get_deployments(pool: State<'_, DbPool>) -> Result<Vec<SkillDeployment>, AppError> {
+    info!("[get_deployments] 查询所有部署");
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
         "SELECT id, skill_id, project_id, tool, path, checksum, status,
@@ -38,6 +40,7 @@ pub async fn get_skill_deployments(
     skill_id: String,
     pool: State<'_, DbPool>,
 ) -> Result<Vec<SkillDeployment>, AppError> {
+    info!("[get_skill_deployments] 查询 Skill 部署: {}", skill_id);
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
         "SELECT id, skill_id, project_id, tool, path, checksum, status,
@@ -72,6 +75,7 @@ pub async fn create_deployment(
     target_path: String,
     pool: State<'_, DbPool>,
 ) -> Result<SkillDeployment, AppError> {
+    info!("[create_deployment] 创建部署: skill={}, tool={}, path={}", skill_id, tool, target_path);
     let conn = pool.get()?;
     let id = Uuid::new_v4().to_string();
 
@@ -117,6 +121,7 @@ pub async fn delete_deployment(
     deployment_id: String,
     pool: State<'_, DbPool>,
 ) -> Result<(), AppError> {
+    info!("[delete_deployment] 删除部署: {}", deployment_id);
     let conn = pool.get()?;
     let affected = conn.execute(
         "DELETE FROM skill_deployments WHERE id = ?1",
@@ -135,6 +140,7 @@ pub async fn update_deployment_status(
     checksum: Option<String>,
     pool: State<'_, DbPool>,
 ) -> Result<(), AppError> {
+    info!("[update_deployment_status] 更新部署状态: id={}, status={}", deployment_id, status);
     let conn = pool.get()?;
     conn.execute(
         "UPDATE skill_deployments SET status = ?1, checksum = ?2,
@@ -148,6 +154,7 @@ pub async fn update_deployment_status(
 pub async fn get_diverged_deployments(
     pool: State<'_, DbPool>,
 ) -> Result<Vec<SkillDeployment>, AppError> {
+    info!("[get_diverged_deployments] 查询偏离部署");
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
         "SELECT sd.id, sd.skill_id, sd.project_id, sd.tool, sd.path, sd.checksum,

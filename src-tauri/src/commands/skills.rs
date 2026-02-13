@@ -1,3 +1,4 @@
+use log::info;
 use rusqlite::params;
 use tauri::State;
 use uuid::Uuid;
@@ -8,6 +9,7 @@ use crate::models::{Skill, SkillSource, SkillBackup};
 
 #[tauri::command]
 pub async fn get_skills(pool: State<'_, DbPool>) -> Result<Vec<Skill>, AppError> {
+    info!("[get_skills] 查询所有 Skill");
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
         "SELECT id, name, description, version, checksum, local_path,
@@ -34,6 +36,7 @@ pub async fn get_skills(pool: State<'_, DbPool>) -> Result<Vec<Skill>, AppError>
 
 #[tauri::command]
 pub async fn get_skill_by_id(skill_id: String, pool: State<'_, DbPool>) -> Result<Skill, AppError> {
+    info!("[get_skill_by_id] 查询 Skill: {}", skill_id);
     let conn = pool.get()?;
     let skill = conn.query_row(
         "SELECT id, name, description, version, checksum, local_path,
@@ -65,6 +68,7 @@ pub async fn create_skill(
     source_url: Option<String>,
     pool: State<'_, DbPool>,
 ) -> Result<Skill, AppError> {
+    info!("[create_skill] 创建 Skill: name={}, source_type={}", name, source_type);
     let conn = pool.get()?;
     let skill_id = Uuid::new_v4().to_string();
     let source_id = Uuid::new_v4().to_string();
@@ -123,6 +127,7 @@ pub async fn create_skill(
 
 #[tauri::command]
 pub async fn delete_skill(skill_id: String, pool: State<'_, DbPool>) -> Result<(), AppError> {
+    info!("[delete_skill] 删除 Skill: {}", skill_id);
     let conn = pool.get()?;
     let affected = conn.execute("DELETE FROM skills WHERE id = ?1", params![skill_id])?;
     if affected == 0 {
@@ -136,6 +141,7 @@ pub async fn get_skill_source(
     skill_id: String,
     pool: State<'_, DbPool>,
 ) -> Result<Option<SkillSource>, AppError> {
+    info!("[get_skill_source] 查询 Skill 来源: {}", skill_id);
     let conn = pool.get()?;
     let source = conn.query_row(
         "SELECT id, skill_id, source_type, url, installed_version,
@@ -162,6 +168,7 @@ pub async fn get_skill_backups(
     skill_id: String,
     pool: State<'_, DbPool>,
 ) -> Result<Vec<SkillBackup>, AppError> {
+    info!("[get_skill_backups] 查询 Skill 备份: {}", skill_id);
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
         "SELECT id, skill_id, version_label, backup_path, checksum, reason, metadata, created_at
@@ -189,6 +196,7 @@ use rusqlite::OptionalExtension;
 
 #[tauri::command]
 pub async fn read_skill_file(file_path: String) -> Result<String, AppError> {
+    info!("[read_skill_file] 读取文件: {}", file_path);
     let path = std::path::Path::new(&file_path);
     if !path.exists() {
         return Err(AppError::NotFound(format!("文件不存在: {}", file_path)));
@@ -199,6 +207,7 @@ pub async fn read_skill_file(file_path: String) -> Result<String, AppError> {
 
 #[tauri::command]
 pub async fn write_skill_file(file_path: String, content: String) -> Result<(), AppError> {
+    info!("[write_skill_file] 写入文件: {} ({} bytes)", file_path, content.len());
     let path = std::path::Path::new(&file_path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -209,6 +218,7 @@ pub async fn write_skill_file(file_path: String, content: String) -> Result<(), 
 
 #[tauri::command]
 pub async fn list_skill_files(dir_path: String) -> Result<Vec<String>, AppError> {
+    info!("[list_skill_files] 列出目录: {}", dir_path);
     let path = std::path::Path::new(&dir_path);
     if !path.exists() || !path.is_dir() {
         return Ok(vec![]);

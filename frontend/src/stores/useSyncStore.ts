@@ -63,44 +63,53 @@ export const useSyncStore = create<SyncStore>()((set) => ({
   isExporting: false,
   checkProgress: 0,
   fetchChangeEvents: async () => {
+    console.log('[SyncStore] fetchChangeEvents 开始')
     try {
       if (isTauri()) {
         const rows = await syncApi.getChangeEvents()
+        console.log(`[SyncStore] fetchChangeEvents 完成: ${rows.length} 个事件`)
         set({ changeEvents: rows.map(mapChangeEventRow) })
       } else {
         await new Promise((r) => setTimeout(r, 300))
+        console.log('[SyncStore] fetchChangeEvents: 使用 mock 数据')
         set({ changeEvents: mockChangeEvents })
       }
     } catch (e) {
-      console.error('fetchChangeEvents error:', e)
+      console.error('[SyncStore] fetchChangeEvents 失败:', e)
       set({ changeEvents: mockChangeEvents })
     }
   },
   fetchSyncHistory: async () => {
+    console.log('[SyncStore] fetchSyncHistory 开始')
     try {
       if (isTauri()) {
         const rows = await syncApi.getHistory(50)
+        console.log(`[SyncStore] fetchSyncHistory 完成: ${rows.length} 条记录`)
         set({ syncHistory: rows.map(mapSyncHistoryRow) })
       } else {
         await new Promise((r) => setTimeout(r, 300))
+        console.log('[SyncStore] fetchSyncHistory: 使用 mock 数据')
         set({ syncHistory: mockSyncHistory })
       }
     } catch (e) {
-      console.error('fetchSyncHistory error:', e)
+      console.error('[SyncStore] fetchSyncHistory 失败:', e)
       set({ syncHistory: mockSyncHistory })
     }
   },
   fetchGitConfig: async () => {
+    console.log('[SyncStore] fetchGitConfig 开始')
     try {
       if (isTauri()) {
         const configs = await settingsApi.getGitConfigs()
+        console.log(`[SyncStore] fetchGitConfig 完成: ${configs.length} 个配置`)
         set({ gitConfig: configs.length > 0 ? mapGitConfigRow(configs[0]) : null })
       } else {
         await new Promise((r) => setTimeout(r, 200))
+        console.log('[SyncStore] fetchGitConfig: 使用 mock 数据')
         set({ gitConfig: mockGitConfig })
       }
     } catch (e) {
-      console.error('fetchGitConfig error:', e)
+      console.error('[SyncStore] fetchGitConfig 失败:', e)
       set({ gitConfig: mockGitConfig })
     }
   },
@@ -118,8 +127,9 @@ export const useSyncStore = create<SyncStore>()((set) => ({
     set({ isExporting: false })
   },
   resolveEvent: (id) => {
+    console.log(`[SyncStore] resolveEvent: ${id}`)
     if (isTauri()) {
-      syncApi.resolveEvent(id, 'conflict_resolved').catch(console.error)
+      syncApi.resolveEvent(id, 'conflict_resolved').catch((e) => console.error('[SyncStore] resolveEvent 失败:', e))
     }
     set((s) => ({
       changeEvents: s.changeEvents.map((e) =>
@@ -128,8 +138,9 @@ export const useSyncStore = create<SyncStore>()((set) => ({
     }))
   },
   ignoreEvent: (id) => {
+    console.log(`[SyncStore] ignoreEvent: ${id}`)
     if (isTauri()) {
-      syncApi.resolveEvent(id, 'ignored').catch(console.error)
+      syncApi.resolveEvent(id, 'ignored').catch((e) => console.error('[SyncStore] ignoreEvent 失败:', e))
     }
     set((s) => ({
       changeEvents: s.changeEvents.map((e) =>
