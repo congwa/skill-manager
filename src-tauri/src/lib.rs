@@ -71,6 +71,8 @@ pub fn run() {
             commands::skills::read_skill_file,
             commands::skills::write_skill_file,
             commands::skills::list_skill_files,
+            commands::skills::check_skill_updates,
+            commands::skills::update_skill_from_library,
             // Deployments
             commands::deployments::get_deployments,
             commands::deployments::get_skill_deployments,

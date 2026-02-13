@@ -101,6 +101,29 @@ export const skillsApi = {
   readFile: (filePath: string) => invoke<string>('read_skill_file', { filePath }),
   writeFile: (filePath: string, content: string) => invoke<void>('write_skill_file', { filePath, content }),
   listFiles: (dirPath: string) => invoke<string[]>('list_skill_files', { dirPath }),
+  checkUpdates: () => invoke<SkillUpdateInfoRow[]>('check_skill_updates'),
+  updateFromLibrary: (skillId: string, syncDeployments: boolean) =>
+    invoke<SkillUpdateResultRow>('update_skill_from_library', { skillId, syncDeployments }),
+}
+
+export interface SkillUpdateInfoRow {
+  skill_id: string
+  skill_name: string
+  current_version: string | null
+  source_type: string
+  source_url: string | null
+  installed_version: string | null
+  original_checksum: string | null
+  current_checksum: string | null
+  locally_modified: boolean
+  deploy_count: number
+}
+
+export interface SkillUpdateResultRow {
+  skill_id: string
+  backup_id: string | null
+  deployments_synced: number
+  new_checksum: string | null
 }
 
 // ── Deployments ──

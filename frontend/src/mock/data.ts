@@ -1,6 +1,6 @@
 import type {
   Project, Skill, SkillDeployment, ChangeEvent, SyncHistory,
-  SkillBackup, GitConfig, AppSettings, StoreSkill
+  SkillBackup, GitConfig, AppSettings
 } from '@/types'
 
 export const mockProjects: Project[] = [
@@ -112,11 +112,3 @@ export const mockSettings: AppSettings = {
   file_watch_enabled: true, update_check_frequency: 'daily', auto_update: false, history_retention_days: 90,
 }
 
-export const mockStoreSkills: StoreSkill[] = [
-  { id: 'ss1', name: 'react-best-practices', description: 'React 和 Next.js 性能优化指南', version: '3.0.0', compatible_tools: ['windsurf', 'cursor', 'claude-code'], install_count: 12500, rating: 4.8, category: 'Frontend' },
-  { id: 'ss2', name: 'python-testing', description: 'Python 单元测试和集成测试最佳实践', version: '2.1.0', compatible_tools: ['windsurf', 'cursor', 'codex'], install_count: 8900, rating: 4.6, category: 'Testing' },
-  { id: 'ss3', name: 'docker-deploy', description: 'Docker 容器化部署和 CI/CD 自动化', version: '1.5.0', compatible_tools: ['windsurf', 'cursor', 'claude-code', 'codex', 'trae'], install_count: 15200, rating: 4.9, category: 'DevOps' },
-  { id: 'ss4', name: 'sqlite-expert', description: 'SQLite 嵌入式数据库开发专家', version: '1.0.0', compatible_tools: ['windsurf', 'cursor'], install_count: 3400, rating: 4.5, category: 'Database' },
-  { id: 'ss5', name: 'api-design', description: 'RESTful API 设计规范与 OpenAPI 生成', version: '2.0.0', compatible_tools: ['windsurf', 'cursor', 'claude-code'], install_count: 9800, rating: 4.7, category: 'Backend' },
-  { id: 'ss6', name: 'tailwindcss', description: 'Tailwind CSS v4 开发指南', version: '2.1.0', compatible_tools: ['windsurf', 'cursor', 'claude-code'], install_count: 18000, rating: 4.9, category: 'Frontend', installed_version: '2.0.0', has_update: true },
-]
