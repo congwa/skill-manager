@@ -146,6 +146,139 @@ pub async fn scan_and_import_project(
     Ok(scan_result)
 }
 
+const GLOBAL_TOOL_DIRS: &[(&str, &str)] = &[
+    ("windsurf", ".windsurf/skills"),
+    ("cursor", ".cursor/skills"),
+    ("claude-code", ".claude/skills"),
+    ("codex", ".agents/skills"),
+    ("trae", ".trae/skills"),
+];
+
+#[derive(serde::Serialize)]
+pub struct GlobalScanResult {
+    pub tools_found: Vec<String>,
+    pub skills_imported: usize,
+    pub deployments_created: usize,
+}
+
+#[tauri::command]
+pub async fn scan_global_skills(
+    pool: State<'_, DbPool>,
+) -> Result<GlobalScanResult, AppError> {
+    let home = dirs::home_dir().expect("Cannot find home directory");
+    let mut tools_found = Vec::new();
+    let mut all_skills: Vec<(String, ScannedSkill)> = Vec::new();
+
+    for (tool, dir) in GLOBAL_TOOL_DIRS {
+        let global_dir = home.join(dir);
+        if global_dir.exists() && global_dir.is_dir() {
+            tools_found.push(tool.to_string());
+            if let Ok(entries) = std::fs::read_dir(&global_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let skill_md = path.join("SKILL.md");
+                        if skill_md.exists() {
+                            let (name, description, version) = parse_skill_md(&skill_md);
+                            all_skills.push((tool.to_string(), ScannedSkill {
+                                name,
+                                description,
+                                version,
+                                tool: tool.to_string(),
+                                path: path.to_string_lossy().to_string(),
+                            }));
+                        } else {
+                            let name = path.file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "unknown".to_string());
+                            all_skills.push((tool.to_string(), ScannedSkill {
+                                name,
+                                description: None,
+                                version: None,
+                                tool: tool.to_string(),
+                                path: path.to_string_lossy().to_string(),
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let skills_imported;
+    let deployments_created;
+
+    {
+        let conn = pool.get()?;
+        let tx = conn.unchecked_transaction()?;
+
+        let mut skill_count = 0usize;
+        let mut deploy_count = 0usize;
+
+        for (_tool, skill) in &all_skills {
+            let skill_id = Uuid::new_v4().to_string();
+            let lib_home = dirs::home_dir().expect("Cannot find home directory");
+            let local_path = lib_home
+                .join(".skills-manager")
+                .join("skills")
+                .join(&skill.name)
+                .to_string_lossy()
+                .to_string();
+
+            let checksum = compute_dir_checksum(Path::new(&skill.path));
+
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO skills (id, name, description, version, checksum, local_path, last_modified)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
+                params![skill_id, skill.name, skill.description, skill.version, checksum, local_path],
+            )?;
+
+            if inserted > 0 {
+                skill_count += 1;
+            }
+
+            let actual_skill_id: String = tx.query_row(
+                "SELECT id FROM skills WHERE name = ?1",
+                params![skill.name],
+                |row| row.get(0),
+            )?;
+
+            tx.execute(
+                "INSERT OR IGNORE INTO skill_sources (id, skill_id, source_type)
+                 VALUES (?1, ?2, 'local')",
+                params![Uuid::new_v4().to_string(), actual_skill_id],
+            )?;
+
+            let deployment_id = Uuid::new_v4().to_string();
+            let dep_inserted = tx.execute(
+                "INSERT OR IGNORE INTO skill_deployments (id, skill_id, project_id, tool, path, checksum, status, last_synced)
+                 VALUES (?1, ?2, NULL, ?3, ?4, ?5, 'synced', datetime('now'))",
+                params![
+                    deployment_id,
+                    actual_skill_id,
+                    skill.tool,
+                    skill.path,
+                    checksum,
+                ],
+            )?;
+
+            if dep_inserted > 0 {
+                deploy_count += 1;
+            }
+        }
+
+        tx.commit()?;
+        skills_imported = skill_count;
+        deployments_created = deploy_count;
+    }
+
+    Ok(GlobalScanResult {
+        tools_found,
+        skills_imported,
+        deployments_created,
+    })
+}
+
 fn parse_skill_md(path: &Path) -> (String, Option<String>, Option<String>) {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,

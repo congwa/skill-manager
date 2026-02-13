@@ -17,7 +17,7 @@ import { useProjectStore } from '@/stores/useProjectStore'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useSyncStore } from '@/stores/useSyncStore'
-import { isTauri, settingsApi } from '@/lib/tauri-api'
+import { isTauri, settingsApi, scannerApi } from '@/lib/tauri-api'
 
 function App() {
   const onboardingCompleted = useUIStore((s) => s.onboardingCompleted)
@@ -39,6 +39,8 @@ function App() {
           if (!status.initialized) {
             await settingsApi.initializeApp()
           }
+          // 每次启动扫描全局工具目录的 Skill 入库
+          await scannerApi.scanGlobalSkills().catch(console.error)
         }
       } catch (e) {
         console.error('App init error:', e)

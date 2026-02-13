@@ -237,8 +237,15 @@ export interface ScanResultData {
   skills: ScannedSkill[]
 }
 
+export interface GlobalScanResult {
+  tools_found: string[]
+  skills_imported: number
+  deployments_created: number
+}
+
 export const scannerApi = {
   scan: (projectPath: string) => invoke<ScanResultData>('scan_project', { projectPath }),
   scanAndImport: (projectPath: string) =>
     invoke<ScanResultData>('scan_and_import_project', { projectPath }),
+  scanGlobalSkills: () => invoke<GlobalScanResult>('scan_global_skills'),
 }

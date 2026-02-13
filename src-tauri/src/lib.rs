@@ -54,6 +54,7 @@ pub fn run() {
             // Scanner
             commands::scanner::scan_project,
             commands::scanner::scan_and_import_project,
+            commands::scanner::scan_global_skills,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
