@@ -155,6 +155,17 @@ export interface GitExportConfigRow {
   updated_at: string
 }
 
+export interface AppInitStatus {
+  initialized: boolean
+  db_path: string
+  skills_lib_path: string
+  backups_path: string
+  db_exists: boolean
+  skills_dir_exists: boolean
+  project_count: number
+  skill_count: number
+}
+
 export const settingsApi = {
   getAll: () => invoke<AppSettingRow[]>('get_all_settings'),
   get: (key: string) => invoke<string | null>('get_setting', { key }),
@@ -169,6 +180,10 @@ export const settingsApi = {
   }) => invoke<GitExportConfigRow>('save_git_export_config', params),
   deleteGitConfig: (configId: string) =>
     invoke<void>('delete_git_export_config', { configId }),
+  getInitStatus: () => invoke<AppInitStatus>('get_app_init_status'),
+  initializeApp: (skillsLibPath?: string) =>
+    invoke<AppInitStatus>('initialize_app', { skillsLibPath }),
+  resetApp: () => invoke<void>('reset_app'),
 }
 
 // ── Change Events & Sync History ──

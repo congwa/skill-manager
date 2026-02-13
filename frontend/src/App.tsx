@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AppLayout } from '@/components/layout/AppLayout'
 import Onboarding from '@/pages/Onboarding'
@@ -17,6 +17,7 @@ import { useProjectStore } from '@/stores/useProjectStore'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useSyncStore } from '@/stores/useSyncStore'
+import { isTauri, settingsApi } from '@/lib/tauri-api'
 
 function App() {
   const onboardingCompleted = useUIStore((s) => s.onboardingCompleted)
@@ -28,17 +29,46 @@ function App() {
   const fetchChangeEvents = useSyncStore((s) => s.fetchChangeEvents)
   const fetchSyncHistory = useSyncStore((s) => s.fetchSyncHistory)
   const fetchGitConfig = useSyncStore((s) => s.fetchGitConfig)
+  const [appReady, setAppReady] = useState(false)
 
   useEffect(() => {
-    initOnboarding()
-    fetchProjects()
-    fetchSkills()
-    fetchDeployments()
-    fetchSettings()
-    fetchChangeEvents()
-    fetchSyncHistory()
-    fetchGitConfig()
+    const bootstrap = async () => {
+      try {
+        if (isTauri()) {
+          const status = await settingsApi.getInitStatus()
+          if (!status.initialized) {
+            await settingsApi.initializeApp()
+          }
+        }
+      } catch (e) {
+        console.error('App init error:', e)
+      }
+
+      await Promise.allSettled([
+        initOnboarding(),
+        fetchProjects(),
+        fetchSkills(),
+        fetchDeployments(),
+        fetchSettings(),
+        fetchChangeEvents(),
+        fetchSyncHistory(),
+        fetchGitConfig(),
+      ])
+      setAppReady(true)
+    }
+    bootstrap()
   }, [])
+
+  if (!appReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-cream-50">
+        <div className="text-center space-y-3">
+          <div className="w-12 h-12 border-3 border-peach-300 border-t-peach-500 rounded-full animate-spin mx-auto" />
+          <p className="text-sm text-cream-500">正在初始化应用...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <BrowserRouter>

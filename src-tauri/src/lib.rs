@@ -48,6 +48,9 @@ pub fn run() {
             commands::settings::get_change_events,
             commands::settings::resolve_change_event,
             commands::settings::get_sync_history,
+            commands::settings::get_app_init_status,
+            commands::settings::initialize_app,
+            commands::settings::reset_app,
             // Scanner
             commands::scanner::scan_project,
             commands::scanner::scan_and_import_project,

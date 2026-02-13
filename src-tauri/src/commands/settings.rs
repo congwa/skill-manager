@@ -227,3 +227,123 @@ pub async fn get_sync_history(
 
     Ok(history)
 }
+
+// ── App Initialization ──
+
+#[derive(serde::Serialize)]
+pub struct AppInitStatus {
+    pub initialized: bool,
+    pub db_path: String,
+    pub skills_lib_path: String,
+    pub backups_path: String,
+    pub db_exists: bool,
+    pub skills_dir_exists: bool,
+    pub project_count: i64,
+    pub skill_count: i64,
+}
+
+#[tauri::command]
+pub async fn get_app_init_status(pool: State<'_, DbPool>) -> Result<AppInitStatus, AppError> {
+    let home = dirs::home_dir().expect("Cannot find home directory");
+    let base = home.join(".skills-manager");
+    let db_path = base.join("db").join("skills.db");
+    let skills_lib = base.join("skills");
+    let backups = base.join("backups");
+
+    let conn = pool.get()?;
+
+    let project_count: i64 = conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))?;
+    let skill_count: i64 = conn.query_row("SELECT COUNT(*) FROM skills", [], |r| r.get(0))?;
+
+    let initialized_val: Option<String> = conn.query_row(
+        "SELECT value FROM app_settings WHERE key = 'initialized'",
+        [],
+        |r| r.get(0),
+    ).unwrap_or(None);
+
+    Ok(AppInitStatus {
+        initialized: initialized_val.as_deref() == Some("true"),
+        db_path: db_path.to_string_lossy().to_string(),
+        skills_lib_path: skills_lib.to_string_lossy().to_string(),
+        backups_path: backups.to_string_lossy().to_string(),
+        db_exists: db_path.exists(),
+        skills_dir_exists: skills_lib.exists(),
+        project_count,
+        skill_count,
+    })
+}
+
+#[tauri::command]
+pub async fn initialize_app(
+    skills_lib_path: Option<String>,
+    pool: State<'_, DbPool>,
+) -> Result<AppInitStatus, AppError> {
+    let home = dirs::home_dir().expect("Cannot find home directory");
+    let base = home.join(".skills-manager");
+
+    let skills_lib = if let Some(ref p) = skills_lib_path {
+        std::path::PathBuf::from(p)
+    } else {
+        base.join("skills")
+    };
+    let backups = base.join("backups");
+
+    // 创建必要目录
+    std::fs::create_dir_all(&skills_lib)?;
+    std::fs::create_dir_all(&backups)?;
+    std::fs::create_dir_all(base.join("db"))?;
+
+    {
+        let conn = pool.get()?;
+        let tx = conn.unchecked_transaction()?;
+
+        let skills_lib_str = skills_lib.to_string_lossy().to_string();
+        let backups_str = backups.to_string_lossy().to_string();
+        let defaults: Vec<(&str, &str)> = vec![
+            ("initialized", "true"),
+            ("theme", "system"),
+            ("language", "zh-CN"),
+            ("startup_page", "projects"),
+            ("notifications_enabled", "true"),
+            ("file_watch_enabled", "true"),
+            ("auto_export_frequency", "manual"),
+            ("update_check_frequency", "daily"),
+            ("auto_update", "false"),
+            ("skills_lib_path", &skills_lib_str),
+            ("backups_path", &backups_str),
+            ("onboarding_completed", "false"),
+        ];
+
+        for (key, value) in &defaults {
+            tx.execute(
+                "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )?;
+        }
+
+        tx.commit()?;
+    }
+
+    get_app_init_status(pool).await
+}
+
+#[tauri::command]
+pub async fn reset_app(pool: State<'_, DbPool>) -> Result<(), AppError> {
+    let conn = pool.get()?;
+    let tx = conn.unchecked_transaction()?;
+
+    tx.execute_batch(
+        "DELETE FROM sync_history;
+         DELETE FROM change_events;
+         DELETE FROM skill_backups;
+         DELETE FROM skill_deployments;
+         DELETE FROM skill_sources;
+         DELETE FROM skills;
+         DELETE FROM projects;
+         DELETE FROM git_export_config;
+         DELETE FROM app_settings;"
+    )?;
+
+    tx.commit()?;
+    Ok(())
+}
