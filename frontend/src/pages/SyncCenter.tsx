@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   GitBranch, CloudUpload, CloudDownload, ShieldCheck,
-  BellRing, AlertTriangle, RefreshCw, Eye, X,
+  BellRing, AlertTriangle, RefreshCw, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -20,6 +20,9 @@ import { Progress } from '@/components/ui/progress'
 import { useSyncStore } from '@/stores/useSyncStore'
 import { cn, relativeTime, toolNames } from '@/lib/utils'
 import { toast } from 'sonner'
+import { isTauri, deploymentsApi } from '@/lib/tauri-api'
+import type { ConsistencyDetailData } from '@/lib/tauri-api'
+import { useSkillStore } from '@/stores/useSkillStore'
 
 export default function SyncCenter() {
   const { changeEvents, syncHistory, gitConfig, resolveEvent, ignoreEvent } = useSyncStore()
@@ -29,30 +32,61 @@ export default function SyncCenter() {
   const [checking, setChecking] = useState(false)
   const [checkProgress, setCheckProgress] = useState(0)
   const [exportOpen, setExportOpen] = useState(false)
+  const [consistencyDetails, setConsistencyDetails] = useState<ConsistencyDetailData[]>([])
+  const [syncingId, setSyncingId] = useState<string | null>(null)
   const pendingCount = changeEvents.filter((e) => e.status === 'pending').length
 
-  const handleConsistencyCheck = () => {
+  const handleConsistencyCheck = async () => {
     setChecking(true)
-    setCheckProgress(0)
-    const iv = setInterval(() => {
-      setCheckProgress((p) => {
-        if (p >= 100) {
-          clearInterval(iv)
-          setChecking(false)
-          setActiveTab('report')
-          toast.success('一致性检查完成')
-          return 100
+    setCheckProgress(10)
+    try {
+      if (isTauri()) {
+        console.log('[SyncCenter] 开始一致性检查...')
+        setCheckProgress(30)
+        const report = await deploymentsApi.checkConsistency()
+        setCheckProgress(80)
+        console.log('[SyncCenter] 一致性检查结果:', JSON.stringify(report, null, 2))
+        await useSkillStore.getState().fetchDeployments()
+        setConsistencyDetails(report.details)
+        setCheckProgress(100)
+        setActiveTab('report')
+        if (report.diverged === 0 && report.missing === 0) {
+          toast.success(`一致性检查完成: ${report.total_deployments} 个部署全部同步 ✓`)
+        } else {
+          toast.warning(`发现 ${report.diverged} 个偏离, ${report.missing} 个缺失 (共 ${report.total_deployments} 个部署)`)
         }
-        return p + 5
-      })
-    }, 150)
+      } else {
+        const iv = setInterval(() => {
+          setCheckProgress((p) => {
+            if (p >= 100) {
+              clearInterval(iv)
+              setChecking(false)
+              setActiveTab('report')
+              toast.success('一致性检查完成')
+              return 100
+            }
+            return p + 5
+          })
+        }, 150)
+        return
+      }
+    } catch (e) {
+      console.error('[SyncCenter] 一致性检查失败:', e)
+      toast.error('一致性检查失败')
+    } finally {
+      setChecking(false)
+    }
   }
+
+  const divergedDetails = consistencyDetails.filter((d) => d.status === 'diverged')
+  const missingDetails = consistencyDetails.filter((d) => d.status === 'missing')
+  const untrackedDetails = consistencyDetails.filter((d) => d.status === 'untracked')
 
   const statCards = [
     { label: 'Git 连接', value: gitConfig?.connected ? '已连接' : '未配置', icon: GitBranch, bg: 'bg-mint-50', color: gitConfig?.connected ? 'text-mint-500' : 'text-cream-500' },
     { label: '最近导出', value: gitConfig?.last_export_at ? relativeTime(gitConfig.last_export_at) : '从未', icon: CloudUpload, bg: 'bg-lavender-50', color: 'text-lavender-400' },
     { label: '待处理变更', value: `${pendingCount}`, icon: BellRing, bg: 'bg-honey-50', color: pendingCount > 0 ? 'text-honey-500' : 'text-cream-500' },
-    { label: '偏离部署', value: '2', icon: AlertTriangle, bg: 'bg-strawberry-50', color: 'text-strawberry-500' },
+    { label: '偏离部署', value: `${divergedDetails.length + missingDetails.length}`, icon: AlertTriangle, bg: 'bg-strawberry-50', color: divergedDetails.length + missingDetails.length > 0 ? 'text-strawberry-500' : 'text-cream-500' },
   ]
 
   const filteredEvents = changeEvents.filter((e) => {
@@ -63,6 +97,55 @@ export default function SyncCenter() {
 
   const eventTypeColors: Record<string, string> = {
     modified: 'text-honey-500', created: 'text-mint-500', deleted: 'text-strawberry-500', renamed: 'text-sky-500',
+    file_modified: 'text-honey-500', file_created: 'text-mint-500', file_deleted: 'text-strawberry-500',
+    checksum_mismatch: 'text-honey-500', untracked_skill: 'text-sky-500',
+  }
+
+  const handleResyncDeployment = async (deploymentId: string) => {
+    if (!isTauri()) return
+    setSyncingId(deploymentId)
+    try {
+      console.log(`[SyncCenter] 重新同步部署: ${deploymentId}`)
+      const result = await deploymentsApi.syncDeployment(deploymentId)
+      console.log(`[SyncCenter] 同步完成: ${result.files_copied} 个文件`)
+      await useSkillStore.getState().fetchDeployments()
+      setConsistencyDetails((prev) =>
+        prev.map((d) => d.deployment_id === deploymentId ? { ...d, status: 'synced' } : d)
+      )
+      toast.success(`同步完成: ${result.files_copied} 个文件已更新`)
+    } catch (e) {
+      console.error('[SyncCenter] 同步失败:', e)
+      toast.error('同步失败')
+    } finally {
+      setSyncingId(null)
+    }
+  }
+
+  const handleDeleteDeployment = async (deploymentId: string) => {
+    if (!isTauri()) return
+    try {
+      console.log(`[SyncCenter] 删除部署记录: ${deploymentId}`)
+      await deploymentsApi.delete(deploymentId)
+      await useSkillStore.getState().fetchDeployments()
+      setConsistencyDetails((prev) => prev.filter((d) => d.deployment_id !== deploymentId))
+      toast.success('部署记录已删除')
+    } catch (e) {
+      console.error('[SyncCenter] 删除失败:', e)
+      toast.error('删除失败')
+    }
+  }
+
+  const handleResolveAndSync = async (eventId: string, deploymentId: string) => {
+    if (!isTauri()) return
+    try {
+      await deploymentsApi.syncDeployment(deploymentId)
+      resolveEvent(eventId)
+      await useSkillStore.getState().fetchDeployments()
+      toast.success('已重新同步并标记已处理')
+    } catch (e) {
+      console.error('[SyncCenter] 同步+处理失败:', e)
+      toast.error('操作失败')
+    }
   }
 
   return (
@@ -162,10 +245,9 @@ export default function SyncCenter() {
                   </Badge>
                   {event.status === 'pending' && (
                     <div className="flex gap-1">
-                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { resolveEvent(event.id); toast.success('已处理') }}>
-                        <RefreshCw className="h-3 w-3 mr-1" /> 更新
+                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleResolveAndSync(event.id, event.file_path)}>
+                        <RefreshCw className="h-3 w-3 mr-1" /> 重新同步
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-7 text-xs"><Eye className="h-3 w-3 mr-1" /> Diff</Button>
                       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { ignoreEvent(event.id); toast.info('已忽略') }}>
                         <X className="h-3 w-3 mr-1" /> 忽略
                       </Button>
@@ -182,37 +264,62 @@ export default function SyncCenter() {
 
         {/* 一致性报告 */}
         <TabsContent value="report" className="space-y-4">
-          {[
-            { label: '已偏离', count: 2, color: 'bg-honey-400', items: ['frontend-design @ EmbedEase/Windsurf', 'skill-creator @ 全局/Cursor'] },
-            { label: '文件丢失', count: 1, color: 'bg-strawberry-400', items: ['gsap-react @ EmbedEase/Windsurf'] },
-            { label: '未追踪', count: 0, color: 'bg-sky-400', items: [] },
-          ].map((section) => (
-            <Collapsible key={section.label} defaultOpen={section.count > 0}>
-              <Card className="border border-cream-200">
-                <CollapsibleTrigger asChild>
-                  <CardContent className="flex items-center gap-3 p-4 cursor-pointer hover:bg-cream-50">
-                    <div className={cn('h-2.5 w-2.5 rounded-full', section.color)} />
-                    <span className="font-semibold text-cream-800">{section.label}</span>
-                    <Badge variant="secondary" className="text-xs">{section.count}</Badge>
-                  </CardContent>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <div className="border-t border-cream-200 divide-y divide-cream-100">
-                    {section.items.map((item) => (
-                      <div key={item} className="flex items-center justify-between px-5 py-3">
-                        <span className="text-sm text-cream-700">{item}</span>
-                        <div className="flex gap-2">
-                          <Button variant="ghost" size="sm" className="text-xs h-7"><RefreshCw className="h-3 w-3 mr-1" /> 重新部署</Button>
-                          <Button variant="ghost" size="sm" className="text-xs h-7"><Eye className="h-3 w-3 mr-1" /> 查看 Diff</Button>
+          {consistencyDetails.length === 0 ? (
+            <Card className="border border-cream-200">
+              <CardContent className="text-center text-cream-400 py-8">
+                请先执行一致性检查
+              </CardContent>
+            </Card>
+          ) : (
+            [
+              { label: '已偏离', color: 'bg-honey-400', items: divergedDetails },
+              { label: '文件缺失', color: 'bg-strawberry-400', items: missingDetails },
+              { label: '未追踪', color: 'bg-sky-400', items: untrackedDetails },
+            ].map((section) => (
+              <Collapsible key={section.label} defaultOpen={section.items.length > 0}>
+                <Card className="border border-cream-200">
+                  <CollapsibleTrigger asChild>
+                    <CardContent className="flex items-center gap-3 p-4 cursor-pointer hover:bg-cream-50">
+                      <div className={cn('h-2.5 w-2.5 rounded-full', section.color)} />
+                      <span className="font-semibold text-cream-800">{section.label}</span>
+                      <Badge variant="secondary" className="text-xs">{section.items.length}</Badge>
+                    </CardContent>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div className="border-t border-cream-200 divide-y divide-cream-100">
+                      {section.items.map((detail) => (
+                        <div key={detail.deployment_id} className="flex items-center justify-between px-5 py-3">
+                          <div className="space-y-0.5">
+                            <span className="text-sm font-medium text-cream-800">{detail.skill_name}</span>
+                            <p className="text-xs text-cream-400">{detail.tool} · {detail.deploy_path}</p>
+                          </div>
+                          <div className="flex gap-2">
+                            {detail.status !== 'missing' && (
+                              <Button
+                                variant="ghost" size="sm" className="text-xs h-7"
+                                disabled={syncingId === detail.deployment_id}
+                                onClick={() => handleResyncDeployment(detail.deployment_id)}
+                              >
+                                <RefreshCw className={cn('h-3 w-3 mr-1', syncingId === detail.deployment_id && 'animate-spin')} />
+                                {syncingId === detail.deployment_id ? '同步中...' : '重新同步'}
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost" size="sm" className="text-xs h-7 text-strawberry-500 hover:text-strawberry-600"
+                              onClick={() => handleDeleteDeployment(detail.deployment_id)}
+                            >
+                              <X className="h-3 w-3 mr-1" /> 删除记录
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                    {section.count === 0 && <p className="text-center text-cream-400 py-4 text-sm">无</p>}
-                  </div>
-                </CollapsibleContent>
-              </Card>
-            </Collapsible>
-          ))}
+                      ))}
+                      {section.items.length === 0 && <p className="text-center text-cream-400 py-4 text-sm">无</p>}
+                    </div>
+                  </CollapsibleContent>
+                </Card>
+              </Collapsible>
+            ))
+          )}
         </TabsContent>
 
         {/* 操作历史 */}

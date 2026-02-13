@@ -118,20 +118,68 @@ export interface DeploymentRow {
   updated_at: string
 }
 
+export interface DeployResultData {
+  deployment_id: string
+  files_copied: number
+  checksum: string | null
+  deploy_path: string
+}
+
+export interface SyncResultData {
+  files_copied: number
+  old_checksum: string | null
+  new_checksum: string | null
+}
+
+export interface ConsistencyReportData {
+  total_deployments: number
+  synced: number
+  diverged: number
+  missing: number
+  details: ConsistencyDetailData[]
+}
+
+export interface ConsistencyDetailData {
+  deployment_id: string
+  skill_name: string
+  tool: string
+  deploy_path: string
+  status: string
+  lib_checksum: string | null
+  deploy_checksum: string | null
+}
+
+export interface ReconcileReportData {
+  deployments_checked: number
+  missing_detected: number
+  diverged_detected: number
+  untracked_found: number
+  change_events_created: number
+}
+
 export const deploymentsApi = {
   getAll: () => invoke<DeploymentRow[]>('get_deployments'),
   getBySkill: (skillId: string) =>
     invoke<DeploymentRow[]>('get_skill_deployments', { skillId }),
   create: (params: {
     skillId: string
-    projectId?: string
+    projectId: string | null
     tool: string
     targetPath: string
   }) => invoke<DeploymentRow>('create_deployment', params),
-  delete: (deploymentId: string) => invoke<void>('delete_deployment', { deploymentId }),
-  updateStatus: (deploymentId: string, status: string, checksum?: string) =>
+  delete: (deploymentId: string) =>
+    invoke<void>('delete_deployment', { deploymentId }),
+  updateStatus: (deploymentId: string, status: string, checksum: string | null) =>
     invoke<void>('update_deployment_status', { deploymentId, status, checksum }),
   getDiverged: () => invoke<DeploymentRow[]>('get_diverged_deployments'),
+  deployToProject: (skillId: string, projectId: string, tool: string) =>
+    invoke<DeployResultData>('deploy_skill_to_project', { skillId, projectId, tool }),
+  syncDeployment: (deploymentId: string) =>
+    invoke<SyncResultData>('sync_deployment', { deploymentId }),
+  checkConsistency: () =>
+    invoke<ConsistencyReportData>('check_deployment_consistency'),
+  reconcile: () =>
+    invoke<ReconcileReportData>('reconcile_all_deployments'),
 }
 
 // ── Settings ──

@@ -1,10 +1,10 @@
 use log::info;
 use rusqlite::params;
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use tauri::State;
 use uuid::Uuid;
-use walkdir::WalkDir;
+
+use super::utils::compute_dir_checksum;
 
 use crate::db::DbPool;
 use crate::error::AppError;
@@ -336,31 +336,4 @@ fn parse_skill_md(path: &Path) -> (String, Option<String>, Option<String>) {
     (name, description, version)
 }
 
-fn compute_dir_checksum(dir: &Path) -> Option<String> {
-    let mut hasher = Sha256::new();
-    let mut found_files = false;
-
-    let mut paths: Vec<PathBuf> = WalkDir::new(dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.into_path())
-        .collect();
-
-    paths.sort();
-
-    for path in paths {
-        if let Ok(content) = std::fs::read(&path) {
-            let relative = path.strip_prefix(dir).unwrap_or(&path);
-            hasher.update(relative.to_string_lossy().as_bytes());
-            hasher.update(&content);
-            found_files = true;
-        }
-    }
-
-    if found_files {
-        Some(hex::encode(hasher.finalize()))
-    } else {
-        None
-    }
-}
+// compute_dir_checksum 已移到 commands::utils 公共模块

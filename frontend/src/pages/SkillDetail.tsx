@@ -56,13 +56,17 @@ export default function SkillDetail() {
     if (isTauri()) {
       toast.loading('正在同步所有部署...')
       try {
+        let totalFiles = 0
         for (const dep of skillDeployments) {
-          await deploymentsApi.updateStatus(dep.id, 'synced', skill.checksum)
+          console.log(`[SkillDetail] 同步部署: ${dep.id} -> ${dep.deploy_path}`)
+          const result = await deploymentsApi.syncDeployment(dep.id)
+          totalFiles += result.files_copied
+          console.log(`[SkillDetail] 同步完成: ${result.files_copied} 个文件, checksum ${result.old_checksum} -> ${result.new_checksum}`)
         }
         await useSkillStore.getState().fetchDeployments()
-        toast.success(`已同步 ${skillDeployments.length} 个部署`)
+        toast.success(`已同步 ${skillDeployments.length} 个部署，共 ${totalFiles} 个文件`)
       } catch (e) {
-        console.error('sync error:', e)
+        console.error('[SkillDetail] sync error:', e)
         toast.error('同步失败')
       }
     } else {

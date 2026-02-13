@@ -21,11 +21,12 @@ pub fn run() {
     info!("[启动] 数据库连接池创建成功");
 
     info!("[启动] 构建 Tauri 应用...");
+    let watcher_pool = db_pool.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
-        .setup(|app| {
+        .setup(move |app| {
             info!("[启动] Tauri setup 钩子执行");
             #[cfg(debug_assertions)]
             {
@@ -37,6 +38,18 @@ pub fn run() {
                     log::warn!("[启动] 未找到 main 窗口，无法打开 DevTools");
                 }
             }
+
+            // 启动文件系统监听
+            info!("[启动] 启动文件系统监听...");
+            let _watcher = commands::watcher::start_file_watcher(watcher_pool);
+            if _watcher.is_some() {
+                // 将 watcher 存入 app state 以保持其存活
+                app.manage(_watcher);
+                info!("[启动] 文件系统监听已启动");
+            } else {
+                info!("[启动] 暂无需要监听的目录");
+            }
+
             info!("[启动] Tauri 应用就绪");
             Ok(())
         })
@@ -65,6 +78,10 @@ pub fn run() {
             commands::deployments::delete_deployment,
             commands::deployments::update_deployment_status,
             commands::deployments::get_diverged_deployments,
+            commands::deployments::deploy_skill_to_project,
+            commands::deployments::sync_deployment,
+            commands::deployments::check_deployment_consistency,
+            commands::deployments::reconcile_all_deployments,
             // Settings
             commands::settings::get_all_settings,
             commands::settings::get_setting,

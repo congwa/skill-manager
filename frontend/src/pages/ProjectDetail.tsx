@@ -64,12 +64,18 @@ export default function ProjectDetail() {
     try {
       if (isTauri()) {
         toast.loading('正在检查一致性...')
-        const diverged = await deploymentsApi.getDiverged()
-        const projectDiverged = diverged.filter((d) => d.project_id === projectId)
+        console.log('[ProjectDetail] 开始一致性检查...')
+        const report = await deploymentsApi.checkConsistency()
+        console.log('[ProjectDetail] 一致性检查结果:', JSON.stringify(report, null, 2))
+        await useSkillStore.getState().fetchDeployments()
+        const projectDetails = report.details.filter((d) =>
+          projectDeployments.some((pd) => pd.id === d.deployment_id)
+        )
+        const projectDiverged = projectDetails.filter((d) => d.status !== 'synced')
         if (projectDiverged.length === 0) {
-          toast.success('所有 Skill 状态正常 ✓')
+          toast.success(`所有 Skill 状态正常 ✓ (${projectDetails.length} 个部署已检查)`)
         } else {
-          toast.warning(`发现 ${projectDiverged.length} 个偏离部署`)
+          toast.warning(`发现 ${projectDiverged.length} 个偏离部署 (共 ${projectDetails.length} 个)`)
         }
       } else {
         toast.promise(new Promise((r) => setTimeout(r, 2000)), {
@@ -79,7 +85,7 @@ export default function ProjectDetail() {
         })
       }
     } catch (e) {
-      console.error('consistency check error:', e)
+      console.error('[ProjectDetail] consistency check error:', e)
       toast.error('检查失败')
     }
   }
