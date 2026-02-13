@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { useUIStore } from '@/stores/useUIStore'
 import { useProjectStore } from '@/stores/useProjectStore'
-import { settingsApi, scannerApi } from '@/lib/tauri-api'
+import { settingsApi, scannerApi, gitApi } from '@/lib/tauri-api'
 import type { ScanResultData } from '@/lib/tauri-api'
 
 const steps = ['欢迎', '选择路径', '导入项目', 'Git 配置']
@@ -74,10 +74,18 @@ export default function Onboarding() {
     }
   }
 
-  const handleTestConnection = () => {
+  const handleTestConnection = async () => {
     setTesting(true)
     setTestResult(null)
-    setTimeout(() => { setTesting(false); setTestResult('success') }, 1500)
+    try {
+      const result = await gitApi.testConnection(gitUrl, authType)
+      setTestResult(result.success ? 'success' : 'fail')
+    } catch (e) {
+      console.error('[Onboarding] 连接测试失败:', e)
+      setTestResult('fail')
+    } finally {
+      setTesting(false)
+    }
   }
 
   const handleFinish = async () => {

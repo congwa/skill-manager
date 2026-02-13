@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { ChangeEvent, SyncHistory, GitConfig } from '@/types'
-import { syncApi, settingsApi } from '@/lib/tauri-api'
+import { syncApi, settingsApi, gitApi, deploymentsApi } from '@/lib/tauri-api'
 import type { ChangeEventRow, SyncHistoryRow, GitExportConfigRow } from '@/lib/tauri-api'
 
 function mapChangeEventRow(row: ChangeEventRow): ChangeEvent {
@@ -96,16 +96,33 @@ export const useSyncStore = create<SyncStore>()((set) => ({
   },
   runConsistencyCheck: async () => {
     set({ isChecking: true, checkProgress: 0 })
-    for (let i = 0; i <= 100; i += 10) {
-      await new Promise((r) => setTimeout(r, 300))
-      set({ checkProgress: i })
+    try {
+      set({ checkProgress: 30 })
+      const report = await deploymentsApi.checkConsistency()
+      set({ checkProgress: 100, isChecking: false })
+      console.log(`[SyncStore] 一致性检查完成: ${report.total_deployments} 个部署`)
+    } catch (e) {
+      console.error('[SyncStore] 一致性检查失败:', e)
+      set({ isChecking: false })
     }
-    set({ isChecking: false, checkProgress: 100 })
   },
   exportToGit: async () => {
     set({ isExporting: true })
-    await new Promise((r) => setTimeout(r, 3000))
-    set({ isExporting: false })
+    try {
+      const configs = await settingsApi.getGitConfigs()
+      if (configs.length === 0) {
+        console.error('[SyncStore] 没有 Git 配置')
+        set({ isExporting: false })
+        return
+      }
+      console.log(`[SyncStore] 导出到 Git: config=${configs[0].id}`)
+      const result = await gitApi.exportToGit(configs[0].id)
+      console.log(`[SyncStore] 导出完成: ${result.message}`)
+    } catch (e) {
+      console.error('[SyncStore] 导出失败:', e)
+    } finally {
+      set({ isExporting: false })
+    }
   },
   resolveEvent: (id) => {
     console.log(`[SyncStore] resolveEvent: ${id}`)

@@ -315,3 +315,48 @@ export const scannerApi = {
     invoke<ScanResultData>('scan_and_import_project', { projectPath }),
   scanGlobalSkills: () => invoke<GlobalScanResult>('scan_global_skills'),
 }
+
+// ── Git Operations ──
+
+export interface GitTestResult {
+  success: boolean
+  message: string
+}
+
+export interface GitExportResult {
+  skills_exported: number
+  commit_hash: string | null
+  pushed: boolean
+  message: string
+}
+
+export interface GitRepoSkill {
+  name: string
+  description: string | null
+  version: string | null
+  status: string // "new" | "exists_same" | "exists_conflict"
+  local_version: string | null
+}
+
+export interface GitCloneResult {
+  clone_path: string
+  skills_found: GitRepoSkill[]
+}
+
+export interface GitImportResult {
+  skills_imported: number
+  skills_skipped: number
+  skills_updated: number
+  message: string
+}
+
+export const gitApi = {
+  testConnection: (remoteUrl: string, authType: string) =>
+    invoke<GitTestResult>('test_git_connection', { remoteUrl, authType }),
+  exportToGit: (configId: string) =>
+    invoke<GitExportResult>('export_skills_to_git', { configId }),
+  cloneRepo: (remoteUrl: string, branch?: string) =>
+    invoke<GitCloneResult>('clone_git_repo', { remoteUrl, branch }),
+  importFromRepo: (clonePath: string, skillNames: string[], overwriteConflicts: boolean) =>
+    invoke<GitImportResult>('import_from_git_repo', { clonePath, skillNames, overwriteConflicts }),
+}

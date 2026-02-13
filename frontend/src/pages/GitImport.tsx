@@ -11,12 +11,17 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
+import { gitApi } from '@/lib/tauri-api'
+import { useSkillStore } from '@/stores/useSkillStore'
 
 type ImportStep = 'input' | 'cloning' | 'results' | 'deploy' | 'done'
 
 interface FoundSkill {
   name: string
-  status: 'new' | 'exists' | 'conflict'
+  description: string | null
+  version: string | null
+  status: 'new' | 'exists_same' | 'exists_conflict'
+  localVersion: string | null
   selected: boolean
 }
 
@@ -30,49 +35,68 @@ export default function GitImport() {
   const [cloneStatus, setCloneStatus] = useState('正在连接远程仓库...')
   const [foundSkills, setFoundSkills] = useState<FoundSkill[]>([])
   const [deployProgress, setDeployProgress] = useState(0)
-  const handleStartImport = () => {
+  const [clonePath, setClonePath] = useState('')
+  const [importResult, setImportResult] = useState<{ imported: number; updated: number; skipped: number } | null>(null)
+
+  const handleStartImport = async () => {
     if (!url) { toast.error('请输入仓库地址'); return }
     setStep('cloning')
-    setCloneProgress(0)
-    const statuses = ['正在连接远程仓库...', '正在接收数据 (2.3 MB / 5.1 MB)...', '正在解压文件...', '正在扫描 Skill...']
-    let i = 0
-    const iv = setInterval(() => {
-      setCloneProgress((p) => {
-        if (p >= 100) {
-          clearInterval(iv)
-          setFoundSkills([
-            { name: 'react-best-practices', status: 'new', selected: true },
-            { name: 'docker-deploy', status: 'new', selected: true },
-            { name: 'tailwindcss', status: 'conflict', selected: false },
-            { name: 'python-testing', status: 'exists', selected: false },
-          ])
-          setStep('results')
-          return 100
-        }
-        i = Math.min(i + 1, statuses.length - 1)
-        setCloneStatus(statuses[i])
-        return p + 5
-      })
-    }, 200)
+    setCloneProgress(20)
+    setCloneStatus('正在克隆仓库...')
+    try {
+      setCloneProgress(40)
+      const result = await gitApi.cloneRepo(url)
+      setCloneProgress(80)
+      setCloneStatus('正在扫描 Skill...')
+      setClonePath(result.clone_path)
+      setFoundSkills(result.skills_found.map((s) => ({
+        name: s.name,
+        description: s.description,
+        version: s.version,
+        status: s.status as FoundSkill['status'],
+        localVersion: s.local_version,
+        selected: s.status === 'new',
+      })))
+      setCloneProgress(100)
+      setStep('results')
+      console.log(`[GitImport] 克隆完成: ${result.skills_found.length} 个 Skill`)
+    } catch (e) {
+      console.error('[GitImport] 克隆失败:', e)
+      toast.error('克隆失败: ' + String(e))
+      setStep('input')
+    }
   }
 
-  const handleImportSelected = () => {
+  const handleImportSelected = async () => {
+    const selected = foundSkills.filter((s) => s.selected)
+    if (selected.length === 0) { toast.error('请选择要导入的 Skill'); return }
     setStep('deploy')
-    setDeployProgress(0)
-    const iv = setInterval(() => {
-      setDeployProgress((p) => {
-        if (p >= 100) { clearInterval(iv); setStep('done'); return 100 }
-        return p + 10
-      })
-    }, 300)
+    setDeployProgress(30)
+    try {
+      const hasConflicts = selected.some((s) => s.status === 'exists_conflict')
+      const result = await gitApi.importFromRepo(
+        clonePath,
+        selected.map((s) => s.name),
+        hasConflicts
+      )
+      setDeployProgress(100)
+      setImportResult({ imported: result.skills_imported, updated: result.skills_updated, skipped: result.skills_skipped })
+      await useSkillStore.getState().fetchSkills()
+      setStep('done')
+      console.log(`[GitImport] 导入完成: ${result.message}`)
+    } catch (e) {
+      console.error('[GitImport] 导入失败:', e)
+      toast.error('导入失败: ' + String(e))
+      setStep('results')
+    }
   }
 
   const toggleSkill = (name: string) => {
     setFoundSkills((prev) => prev.map((s) => s.name === name ? { ...s, selected: !s.selected } : s))
   }
 
-  const statusColors = { new: 'bg-mint-100 text-mint-500', exists: 'bg-sky-100 text-sky-500', conflict: 'bg-honey-100 text-honey-500' }
-  const statusLabels = { new: '新增', exists: '已存在', conflict: '冲突' }
+  const statusColors: Record<string, string> = { new: 'bg-mint-100 text-mint-500', exists_same: 'bg-sky-100 text-sky-500', exists_conflict: 'bg-honey-100 text-honey-500' }
+  const statusLabels: Record<string, string> = { new: '新增', exists_same: '已存在(一致)', exists_conflict: '冲突' }
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -125,9 +149,9 @@ export default function GitImport() {
               <p className="text-sm text-cream-500 mt-1">
                 <span className="text-mint-500">{foundSkills.filter((s) => s.status === 'new').length} 个新增</span>
                 {' · '}
-                <span className="text-sky-500">{foundSkills.filter((s) => s.status === 'exists').length} 个已存在</span>
+                <span className="text-sky-500">{foundSkills.filter((s) => s.status === 'exists_same').length} 个已存在</span>
                 {' · '}
-                <span className="text-honey-500">{foundSkills.filter((s) => s.status === 'conflict').length} 个冲突</span>
+                <span className="text-honey-500">{foundSkills.filter((s) => s.status === 'exists_conflict').length} 个冲突</span>
               </p>
             </div>
             <div className="space-y-2">
@@ -137,7 +161,7 @@ export default function GitImport() {
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0, transition: { delay: i * 0.06 } }}
                   className={`flex items-center gap-4 p-4 rounded-xl border transition-colors ${
-                    skill.status === 'conflict' ? 'border-l-[3px] border-l-honey-400 border-cream-200' : 'border-cream-200'
+                    skill.status === 'exists_conflict' ? 'border-l-[3px] border-l-honey-400 border-cream-200' : 'border-cream-200'
                   } ${skill.selected ? 'bg-peach-50/50' : 'bg-card'}`}
                 >
                   <Checkbox checked={skill.selected} onCheckedChange={() => toggleSkill(skill.name)} />
@@ -175,7 +199,7 @@ export default function GitImport() {
             </motion.div>
             <h2 className="text-2xl font-display font-bold text-cream-800">导入完成！</h2>
             <p className="text-cream-500">
-              导入了 {foundSkills.filter((s) => s.selected).length} 个 Skill
+              {importResult ? `新增 ${importResult.imported} 个，更新 ${importResult.updated} 个，跳过 ${importResult.skipped} 个` : `导入了 ${foundSkills.filter((s) => s.selected).length} 个 Skill`}
             </p>
             <div className="flex gap-3 justify-center">
               <Button onClick={() => navigate('/skills')} className="bg-peach-500 hover:bg-peach-600 text-white rounded-xl">

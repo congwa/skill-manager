@@ -20,7 +20,7 @@ import { Progress } from '@/components/ui/progress'
 import { useSyncStore } from '@/stores/useSyncStore'
 import { cn, relativeTime, toolNames } from '@/lib/utils'
 import { toast } from 'sonner'
-import { deploymentsApi } from '@/lib/tauri-api'
+import { deploymentsApi, settingsApi, gitApi } from '@/lib/tauri-api'
 import type { ConsistencyDetailData } from '@/lib/tauri-api'
 import { useSkillStore } from '@/stores/useSkillStore'
 
@@ -349,7 +349,19 @@ export default function SyncCenter() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { setExportOpen(false); toast.promise(new Promise((r) => setTimeout(r, 3000)), { loading: '正在推送到 GitHub...', success: '导出成功', error: '导出失败' }) }}
+            <AlertDialogAction onClick={async () => {
+              setExportOpen(false)
+              try {
+                const configs = await settingsApi.getGitConfigs()
+                if (configs.length === 0) { toast.error('请先配置 Git 仓库'); return }
+                toast.loading('正在导出到 Git...')
+                const result = await gitApi.exportToGit(configs[0].id)
+                toast.success(result.message)
+              } catch (e) {
+                console.error('[SyncCenter] 导出失败:', e)
+                toast.error('导出失败: ' + String(e))
+              }
+            }}
               className="bg-peach-500 hover:bg-peach-600">
               确认导出
             </AlertDialogAction>

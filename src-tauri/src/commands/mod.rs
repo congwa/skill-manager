@@ -5,3 +5,4 @@ pub mod settings;
 pub mod scanner;
 pub mod utils;
 pub mod watcher;
+pub mod git;

@@ -101,6 +101,11 @@ pub fn run() {
             commands::scanner::scan_project,
             commands::scanner::scan_and_import_project,
             commands::scanner::scan_global_skills,
+            // Git
+            commands::git::test_git_connection,
+            commands::git::export_skills_to_git,
+            commands::git::clone_git_repo,
+            commands::git::import_from_git_repo,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

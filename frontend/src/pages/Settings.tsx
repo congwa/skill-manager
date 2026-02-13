@@ -24,7 +24,7 @@ import { cn, toolColors, toolNames } from '@/lib/utils'
 import type { ToolName } from '@/types'
 import { toast } from 'sonner'
 import { useTheme } from 'next-themes'
-import { settingsApi } from '@/lib/tauri-api'
+import { settingsApi, gitApi } from '@/lib/tauri-api'
 
 const sections = [
   { id: 'general', label: '通用', icon: SettingsIcon },
@@ -96,10 +96,24 @@ export default function Settings() {
     }
   }
 
-  const handleTestConnection = () => {
+  const handleTestConnection = async () => {
     setTesting(true)
     setTestResult(null)
-    setTimeout(() => { setTesting(false); setTestResult('success') }, 1500)
+    try {
+      const result = await gitApi.testConnection(gitUrl, authType)
+      setTestResult(result.success ? 'success' : 'fail')
+      if (result.success) {
+        toast.success(result.message)
+      } else {
+        toast.error(result.message)
+      }
+    } catch (e) {
+      console.error('[Settings] 连接测试失败:', e)
+      setTestResult('fail')
+      toast.error('连接测试失败: ' + String(e))
+    } finally {
+      setTesting(false)
+    }
   }
 
   const tools: { name: ToolName; pattern: string; globalPath: string; detected: boolean }[] = [

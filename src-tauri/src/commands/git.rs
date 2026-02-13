@@ -1,0 +1,625 @@
+use log::info;
+use rusqlite::params;
+use serde::Serialize;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use tauri::State;
+use uuid::Uuid;
+
+use super::utils::{compute_dir_checksum, copy_dir_recursive};
+use crate::db::DbPool;
+use crate::error::AppError;
+
+// ── 返回类型 ──
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitTestResult {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitExportResult {
+    pub skills_exported: usize,
+    pub commit_hash: Option<String>,
+    pub pushed: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitCloneResult {
+    pub clone_path: String,
+    pub skills_found: Vec<GitRepoSkill>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitRepoSkill {
+    pub name: String,
+    pub description: Option<String>,
+    pub version: Option<String>,
+    pub status: String, // "new" | "exists_same" | "exists_conflict"
+    pub local_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitImportResult {
+    pub skills_imported: usize,
+    pub skills_skipped: usize,
+    pub skills_updated: usize,
+    pub message: String,
+}
+
+// ── Helper: 运行 git 命令 ──
+
+fn run_git(args: &[&str], cwd: &Path) -> Result<String, AppError> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| AppError::Internal(format!("git 命令执行失败: {}", e)))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(AppError::Internal(format!(
+            "git {} 失败: {}",
+            args.join(" "),
+            stderr
+        )))
+    }
+}
+
+fn run_git_allow_fail(args: &[&str], cwd: &Path) -> (bool, String) {
+    match Command::new("git").args(args).current_dir(cwd).output() {
+        Ok(output) => {
+            let out = if output.status.success() {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            } else {
+                String::from_utf8_lossy(&output.stderr).trim().to_string()
+            };
+            (output.status.success(), out)
+        }
+        Err(e) => (false, format!("执行失败: {}", e)),
+    }
+}
+
+// ── Helper: 解析 SKILL.md frontmatter ──
+
+fn parse_skill_frontmatter(content: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let mut name = None;
+    let mut description = None;
+    let mut version = None;
+
+    if content.starts_with("---") {
+        if let Some(end) = content[3..].find("---") {
+            let frontmatter = &content[3..3 + end];
+            for line in frontmatter.lines() {
+                let line = line.trim();
+                if let Some(val) = line.strip_prefix("name:") {
+                    name = Some(val.trim().trim_matches('"').trim_matches('\'').to_string());
+                } else if let Some(val) = line.strip_prefix("description:") {
+                    description = Some(val.trim().trim_matches('"').trim_matches('\'').to_string());
+                } else if let Some(val) = line.strip_prefix("version:") {
+                    version = Some(val.trim().trim_matches('"').trim_matches('\'').to_string());
+                }
+            }
+        }
+    }
+
+    (name, description, version)
+}
+
+// ── Helper: 获取 skills 库路径 ──
+
+fn get_skills_lib_path(pool: &r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>) -> Result<PathBuf, AppError> {
+    let conn = pool.get()?;
+    let path: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'skills_lib_path'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(None);
+
+    let raw = path
+        .map(|p| {
+            let p = p.trim_matches('"').to_string();
+            if p.starts_with("~/") {
+                if let Some(home) = dirs::home_dir() {
+                    return home.join(&p[2..]).to_string_lossy().to_string();
+                }
+            }
+            p
+        })
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(".skills-manager/skills")
+                .to_string_lossy()
+                .to_string()
+        });
+
+    Ok(PathBuf::from(raw))
+}
+
+// ── 1. test_git_connection ──
+
+#[tauri::command]
+pub async fn test_git_connection(
+    remote_url: String,
+    auth_type: String,
+) -> Result<GitTestResult, AppError> {
+    info!(
+        "[test_git_connection] 测试连接: url={}, auth={}",
+        remote_url, auth_type
+    );
+
+    let temp_dir = std::env::temp_dir().join("skills-manager-git-test");
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| AppError::Internal(format!("创建临时目录失败: {}", e)))?;
+
+    let (success, msg) = run_git_allow_fail(&["ls-remote", "--exit-code", &remote_url], &temp_dir);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    if success {
+        Ok(GitTestResult {
+            success: true,
+            message: "连接成功".to_string(),
+        })
+    } else {
+        Ok(GitTestResult {
+            success: false,
+            message: format!("连接失败: {}", msg),
+        })
+    }
+}
+
+// ── 2. export_skills_to_git ──
+
+#[tauri::command]
+pub async fn export_skills_to_git(
+    config_id: String,
+    pool: State<'_, DbPool>,
+) -> Result<GitExportResult, AppError> {
+    info!("[export_skills_to_git] 开始导出, config_id={}", config_id);
+
+    let conn = pool.get()?;
+
+    // 查询 Git 配置
+    let (remote_url, branch): (String, String) = conn.query_row(
+        "SELECT remote_url, branch FROM git_export_config WHERE id = ?1",
+        params![config_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+
+    info!(
+        "[export_skills_to_git] remote={}, branch={}",
+        remote_url, branch
+    );
+
+    // 获取 skills 库路径
+    let skills_lib = get_skills_lib_path(&pool)?;
+
+    // 准备导出目录
+    let export_dir = std::env::temp_dir().join("skills-manager-export");
+    if export_dir.exists() {
+        std::fs::remove_dir_all(&export_dir)
+            .map_err(|e| AppError::Internal(format!("清理导出目录失败: {}", e)))?;
+    }
+
+    // 尝试 clone 现有仓库（如果存在）
+    let (clone_ok, _) = run_git_allow_fail(
+        &[
+            "clone",
+            "--branch",
+            &branch,
+            "--single-branch",
+            "--depth",
+            "1",
+            &remote_url,
+            export_dir.to_str().unwrap_or(""),
+        ],
+        &std::env::temp_dir(),
+    );
+
+    if !clone_ok {
+        // 仓库不存在或空仓库，初始化新仓库
+        std::fs::create_dir_all(&export_dir)
+            .map_err(|e| AppError::Internal(format!("创建导出目录失败: {}", e)))?;
+        run_git(&["init"], &export_dir)?;
+        run_git(&["remote", "add", "origin", &remote_url], &export_dir)?;
+        run_git(&["checkout", "-b", &branch], &export_dir)?;
+    }
+
+    // 清理导出目录中的 skills/ 文件夹（保留 .git）
+    let export_skills_dir = export_dir.join("skills");
+    if export_skills_dir.exists() {
+        std::fs::remove_dir_all(&export_skills_dir)
+            .map_err(|e| AppError::Internal(format!("清理 skills 目录失败: {}", e)))?;
+    }
+    std::fs::create_dir_all(&export_skills_dir)
+        .map_err(|e| AppError::Internal(format!("创建 skills 目录失败: {}", e)))?;
+
+    // 查询所有 Skill 并复制
+    let mut stmt = conn.prepare(
+        "SELECT id, name, description, version, local_path FROM skills ORDER BY name",
+    )?;
+    let skills: Vec<(String, String, Option<String>, Option<String>, Option<String>)> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut exported = 0;
+    for (_id, name, _desc, _ver, local_path) in &skills {
+        let src = if let Some(lp) = local_path {
+            PathBuf::from(lp)
+        } else {
+            skills_lib.join(name)
+        };
+        if src.exists() {
+            let dest = export_skills_dir.join(name);
+            copy_dir_recursive(&src, &dest)?;
+            exported += 1;
+        }
+    }
+
+    // 生成 README.md
+    let mut readme = String::from("# Skills Manager Backup\n\n");
+    readme.push_str(&format!(
+        "导出时间: {}\n\n",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    ));
+    readme.push_str("| 名称 | 版本 | 描述 |\n|------|------|------|\n");
+    for (_id, name, desc, ver, _lp) in &skills {
+        readme.push_str(&format!(
+            "| {} | {} | {} |\n",
+            name,
+            ver.as_deref().unwrap_or("-"),
+            desc.as_deref().unwrap_or("-")
+        ));
+    }
+    std::fs::write(export_dir.join("README.md"), &readme)
+        .map_err(|e| AppError::Internal(format!("写入 README.md 失败: {}", e)))?;
+
+    // Git add + commit + push
+    run_git(&["add", "-A"], &export_dir)?;
+
+    let (has_changes, _) =
+        run_git_allow_fail(&["diff", "--cached", "--quiet"], &export_dir);
+    
+    let commit_hash = if !has_changes {
+        // has_changes=false 意味着 diff --cached 有差异（exit code != 0）
+        let msg = format!(
+            "backup: {} skills exported at {}",
+            exported,
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
+        run_git(&["commit", "-m", &msg], &export_dir)?;
+        let hash = run_git(&["rev-parse", "HEAD"], &export_dir)?;
+        Some(hash)
+    } else {
+        None
+    };
+
+    // Push
+    let (push_ok, push_msg) = run_git_allow_fail(
+        &["push", "-u", "origin", &branch],
+        &export_dir,
+    );
+
+    if !push_ok {
+        info!(
+            "[export_skills_to_git] push 失败，尝试 pull --rebase: {}",
+            push_msg
+        );
+        run_git(&["pull", "--rebase", "origin", &branch], &export_dir)?;
+        run_git(&["push", "-u", "origin", &branch], &export_dir)?;
+    }
+
+    // 更新 last_push_at
+    conn.execute(
+        "UPDATE git_export_config SET last_push_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
+        params![config_id],
+    )?;
+
+    // 写入 sync_history
+    conn.execute(
+        "INSERT INTO sync_history (id, skill_id, action, status, created_at)
+         VALUES (?1, 'all', 'export', 'success', datetime('now'))",
+        params![Uuid::new_v4().to_string()],
+    )?;
+
+    // 清理导出目录
+    let _ = std::fs::remove_dir_all(&export_dir);
+
+    info!(
+        "[export_skills_to_git] 导出完成: {} 个 Skill",
+        exported
+    );
+
+    Ok(GitExportResult {
+        skills_exported: exported,
+        commit_hash,
+        pushed: true,
+        message: format!("成功导出 {} 个 Skill 到 {}", exported, remote_url),
+    })
+}
+
+// ── 3. clone_git_repo ──
+
+#[tauri::command]
+pub async fn clone_git_repo(
+    remote_url: String,
+    branch: Option<String>,
+    pool: State<'_, DbPool>,
+) -> Result<GitCloneResult, AppError> {
+    info!(
+        "[clone_git_repo] 克隆仓库: url={}, branch={:?}",
+        remote_url, branch
+    );
+
+    let clone_dir = std::env::temp_dir().join("skills-manager-import");
+    if clone_dir.exists() {
+        std::fs::remove_dir_all(&clone_dir)
+            .map_err(|e| AppError::Internal(format!("清理克隆目录失败: {}", e)))?;
+    }
+
+    let branch_str = branch.unwrap_or_else(|| "main".to_string());
+    let (ok, msg) = run_git_allow_fail(
+        &[
+            "clone",
+            "--branch",
+            &branch_str,
+            "--single-branch",
+            "--depth",
+            "1",
+            &remote_url,
+            clone_dir.to_str().unwrap_or(""),
+        ],
+        &std::env::temp_dir(),
+    );
+
+    if !ok {
+        // 如果指定分支失败，尝试不指定分支
+        let (ok2, msg2) = run_git_allow_fail(
+            &[
+                "clone",
+                "--depth",
+                "1",
+                &remote_url,
+                clone_dir.to_str().unwrap_or(""),
+            ],
+            &std::env::temp_dir(),
+        );
+        if !ok2 {
+            return Err(AppError::Internal(format!("克隆仓库失败: {}", msg2)));
+        }
+    }
+
+    // 扫描 skills/ 目录
+    let skills_dir = clone_dir.join("skills");
+    let mut repo_skills = Vec::new();
+
+    if skills_dir.exists() {
+        let conn = pool.get()?;
+
+        for entry in std::fs::read_dir(&skills_dir)
+            .map_err(|e| AppError::Internal(format!("读取 skills 目录失败: {}", e)))?
+        {
+            let entry = entry.map_err(|e| AppError::Internal(e.to_string()))?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let dir_name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            let skill_md = path.join("SKILL.md");
+            let (name, description, version) = if skill_md.exists() {
+                let content = std::fs::read_to_string(&skill_md).unwrap_or_default();
+                let (n, d, v) = parse_skill_frontmatter(&content);
+                (n.unwrap_or(dir_name.clone()), d, v)
+            } else {
+                (dir_name.clone(), None, None)
+            };
+
+            // 检查本地是否存在
+            let local: Option<(String, Option<String>)> = conn
+                .query_row(
+                    "SELECT id, version FROM skills WHERE name = ?1",
+                    params![name],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok();
+
+            let status = if let Some((_local_id, local_ver)) = &local {
+                // 比较 checksum
+                let repo_checksum = compute_dir_checksum(&path).unwrap_or_default();
+                let local_skill_path = get_skills_lib_path(&pool)?.join(&name);
+                if local_skill_path.exists() {
+                    let local_checksum = compute_dir_checksum(&local_skill_path).unwrap_or_default();
+                    if repo_checksum == local_checksum {
+                        "exists_same".to_string()
+                    } else {
+                        "exists_conflict".to_string()
+                    }
+                } else {
+                    "new".to_string()
+                }
+            } else {
+                "new".to_string()
+            };
+
+            repo_skills.push(GitRepoSkill {
+                name,
+                description,
+                version,
+                status,
+                local_version: local.and_then(|(_, v)| v),
+            });
+        }
+    }
+
+    info!(
+        "[clone_git_repo] 扫描完成: {} 个 Skill",
+        repo_skills.len()
+    );
+
+    Ok(GitCloneResult {
+        clone_path: clone_dir.to_string_lossy().to_string(),
+        skills_found: repo_skills,
+    })
+}
+
+// ── 4. import_from_git_repo ──
+
+#[tauri::command]
+pub async fn import_from_git_repo(
+    clone_path: String,
+    skill_names: Vec<String>,
+    overwrite_conflicts: bool,
+    pool: State<'_, DbPool>,
+) -> Result<GitImportResult, AppError> {
+    info!(
+        "[import_from_git_repo] 导入: path={}, skills={:?}, overwrite={}",
+        clone_path, skill_names, overwrite_conflicts
+    );
+
+    let clone_dir = PathBuf::from(&clone_path);
+    let skills_dir = clone_dir.join("skills");
+    let skills_lib = get_skills_lib_path(&pool)?;
+    std::fs::create_dir_all(&skills_lib)
+        .map_err(|e| AppError::Internal(format!("创建 Skill 库目录失败: {}", e)))?;
+
+    let conn = pool.get()?;
+    let mut imported = 0;
+    let mut skipped = 0;
+    let mut updated = 0;
+
+    for name in &skill_names {
+        let src = skills_dir.join(name);
+        if !src.exists() {
+            info!("[import_from_git_repo] 跳过不存在的 Skill: {}", name);
+            skipped += 1;
+            continue;
+        }
+
+        let dest = skills_lib.join(name);
+
+        // 解析 SKILL.md
+        let skill_md = src.join("SKILL.md");
+        let (_, description, version) = if skill_md.exists() {
+            let content = std::fs::read_to_string(&skill_md).unwrap_or_default();
+            parse_skill_frontmatter(&content)
+        } else {
+            (None, None, None)
+        };
+
+        // 检查本地是否已存在
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT id FROM skills WHERE name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(skill_id) = existing {
+            if dest.exists() {
+                let src_checksum = compute_dir_checksum(&src).unwrap_or_default();
+                let dest_checksum = compute_dir_checksum(&dest).unwrap_or_default();
+                if src_checksum == dest_checksum {
+                    info!("[import_from_git_repo] 跳过一致的 Skill: {}", name);
+                    skipped += 1;
+                    continue;
+                }
+                if !overwrite_conflicts {
+                    info!(
+                        "[import_from_git_repo] 跳过冲突的 Skill(不覆盖): {}",
+                        name
+                    );
+                    skipped += 1;
+                    continue;
+                }
+            }
+            // 覆盖更新
+            if dest.exists() {
+                std::fs::remove_dir_all(&dest)
+                    .map_err(|e| AppError::Internal(format!("删除旧 Skill 目录失败: {}", e)))?;
+            }
+            copy_dir_recursive(&src, &dest)?;
+            let new_checksum = compute_dir_checksum(&dest).unwrap_or_default();
+            conn.execute(
+                "UPDATE skills SET description = COALESCE(?2, description), version = COALESCE(?3, version),
+                 checksum = ?4, local_path = ?5, last_modified = datetime('now'), updated_at = datetime('now')
+                 WHERE id = ?1",
+                params![
+                    skill_id,
+                    description,
+                    version,
+                    new_checksum,
+                    dest.to_string_lossy().to_string()
+                ],
+            )?;
+            updated += 1;
+            info!("[import_from_git_repo] 更新 Skill: {}", name);
+        } else {
+            // 新导入
+            copy_dir_recursive(&src, &dest)?;
+            let checksum = compute_dir_checksum(&dest).unwrap_or_default();
+            let skill_id = Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO skills (id, name, description, version, checksum, local_path, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))",
+                params![
+                    skill_id,
+                    name,
+                    description,
+                    version,
+                    checksum,
+                    dest.to_string_lossy().to_string()
+                ],
+            )?;
+            imported += 1;
+            info!("[import_from_git_repo] 导入新 Skill: {}", name);
+        }
+    }
+
+    // 写入 sync_history
+    conn.execute(
+        "INSERT INTO sync_history (id, skill_id, action, status, created_at)
+         VALUES (?1, 'all', 'import', 'success', datetime('now'))",
+        params![Uuid::new_v4().to_string()],
+    )?;
+
+    // 清理克隆目录
+    let _ = std::fs::remove_dir_all(&clone_dir);
+
+    info!(
+        "[import_from_git_repo] 完成: imported={}, updated={}, skipped={}",
+        imported, updated, skipped
+    );
+
+    Ok(GitImportResult {
+        skills_imported: imported,
+        skills_skipped: skipped,
+        skills_updated: updated,
+        message: format!(
+            "导入 {} 个, 更新 {} 个, 跳过 {} 个",
+            imported, updated, skipped
+        ),
+    })
+}
