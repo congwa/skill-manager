@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { isTauri, settingsApi } from '@/lib/tauri-api'
 
 interface Toast {
   id: string
@@ -17,6 +18,7 @@ interface UIStore {
   addToast: (toast: Omit<Toast, 'id'>) => void
   removeToast: (id: string) => void
   completeOnboarding: () => void
+  initOnboardingState: () => Promise<void>
 }
 
 export const useUIStore = create<UIStore>()((set) => ({
@@ -35,5 +37,20 @@ export const useUIStore = create<UIStore>()((set) => ({
     }, 3000)
   },
   removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
-  completeOnboarding: () => set({ onboardingCompleted: true }),
+  completeOnboarding: () => {
+    if (isTauri()) {
+      settingsApi.set('onboarding_completed', 'true').catch(console.error)
+    }
+    set({ onboardingCompleted: true })
+  },
+  initOnboardingState: async () => {
+    try {
+      if (isTauri()) {
+        const val = await settingsApi.get('onboarding_completed')
+        set({ onboardingCompleted: val === 'true' })
+      }
+    } catch (e) {
+      console.error('initOnboardingState error:', e)
+    }
+  },
 }))

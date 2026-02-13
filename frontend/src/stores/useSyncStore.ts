@@ -1,6 +1,43 @@
 import { create } from 'zustand'
 import type { ChangeEvent, SyncHistory, GitConfig } from '@/types'
 import { mockChangeEvents, mockSyncHistory, mockGitConfig } from '@/mock/data'
+import { isTauri, syncApi, settingsApi } from '@/lib/tauri-api'
+import type { ChangeEventRow, SyncHistoryRow, GitExportConfigRow } from '@/lib/tauri-api'
+
+function mapChangeEventRow(row: ChangeEventRow): ChangeEvent {
+  return {
+    id: row.id,
+    skill_name: '',
+    project_name: '',
+    tool_name: 'windsurf',
+    event_type: row.event_type as ChangeEvent['event_type'],
+    status: (row.resolution === 'pending' ? 'pending' : row.resolution === 'ignored' ? 'ignored' : 'resolved') as ChangeEvent['status'],
+    detected_at: row.created_at,
+    file_path: row.deployment_id,
+  }
+}
+
+function mapSyncHistoryRow(row: SyncHistoryRow): SyncHistory {
+  return {
+    id: row.id,
+    action_type: row.action as SyncHistory['action_type'],
+    skill_name: row.skill_id,
+    result: row.status === 'success' ? 'success' : 'failed',
+    error_message: row.error_message || undefined,
+    created_at: row.created_at,
+  }
+}
+
+function mapGitConfigRow(row: GitExportConfigRow): GitConfig {
+  return {
+    platform: row.provider as GitConfig['platform'],
+    repo_url: row.remote_url,
+    auth_type: row.auth_type as GitConfig['auth_type'],
+    branch: row.branch,
+    connected: true,
+    last_export_at: row.last_push_at || undefined,
+  }
+}
 
 interface SyncStore {
   changeEvents: ChangeEvent[]
@@ -19,23 +56,53 @@ interface SyncStore {
 }
 
 export const useSyncStore = create<SyncStore>()((set) => ({
-  changeEvents: mockChangeEvents,
-  syncHistory: mockSyncHistory,
-  gitConfig: mockGitConfig,
+  changeEvents: [],
+  syncHistory: [],
+  gitConfig: null,
   isChecking: false,
   isExporting: false,
   checkProgress: 0,
   fetchChangeEvents: async () => {
-    await new Promise((r) => setTimeout(r, 300))
-    set({ changeEvents: mockChangeEvents })
+    try {
+      if (isTauri()) {
+        const rows = await syncApi.getChangeEvents()
+        set({ changeEvents: rows.map(mapChangeEventRow) })
+      } else {
+        await new Promise((r) => setTimeout(r, 300))
+        set({ changeEvents: mockChangeEvents })
+      }
+    } catch (e) {
+      console.error('fetchChangeEvents error:', e)
+      set({ changeEvents: mockChangeEvents })
+    }
   },
   fetchSyncHistory: async () => {
-    await new Promise((r) => setTimeout(r, 300))
-    set({ syncHistory: mockSyncHistory })
+    try {
+      if (isTauri()) {
+        const rows = await syncApi.getHistory(50)
+        set({ syncHistory: rows.map(mapSyncHistoryRow) })
+      } else {
+        await new Promise((r) => setTimeout(r, 300))
+        set({ syncHistory: mockSyncHistory })
+      }
+    } catch (e) {
+      console.error('fetchSyncHistory error:', e)
+      set({ syncHistory: mockSyncHistory })
+    }
   },
   fetchGitConfig: async () => {
-    await new Promise((r) => setTimeout(r, 200))
-    set({ gitConfig: mockGitConfig })
+    try {
+      if (isTauri()) {
+        const configs = await settingsApi.getGitConfigs()
+        set({ gitConfig: configs.length > 0 ? mapGitConfigRow(configs[0]) : null })
+      } else {
+        await new Promise((r) => setTimeout(r, 200))
+        set({ gitConfig: mockGitConfig })
+      }
+    } catch (e) {
+      console.error('fetchGitConfig error:', e)
+      set({ gitConfig: mockGitConfig })
+    }
   },
   runConsistencyCheck: async () => {
     set({ isChecking: true, checkProgress: 0 })
@@ -50,16 +117,24 @@ export const useSyncStore = create<SyncStore>()((set) => ({
     await new Promise((r) => setTimeout(r, 3000))
     set({ isExporting: false })
   },
-  resolveEvent: (id) =>
+  resolveEvent: (id) => {
+    if (isTauri()) {
+      syncApi.resolveEvent(id, 'conflict_resolved').catch(console.error)
+    }
     set((s) => ({
       changeEvents: s.changeEvents.map((e) =>
         e.id === id ? { ...e, status: 'resolved' as const } : e
       ),
-    })),
-  ignoreEvent: (id) =>
+    }))
+  },
+  ignoreEvent: (id) => {
+    if (isTauri()) {
+      syncApi.resolveEvent(id, 'ignored').catch(console.error)
+    }
     set((s) => ({
       changeEvents: s.changeEvents.map((e) =>
         e.id === id ? { ...e, status: 'ignored' as const } : e
       ),
-    })),
+    }))
+  },
 }))
