@@ -298,12 +298,34 @@ pub async fn export_skills_to_git(
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut exported = 0;
-    for (_id, name, _desc, _ver, local_path) in &skills {
-        let src = if let Some(lp) = local_path {
+    for (id, name, _desc, _ver, local_path) in &skills {
+        let mut src = if let Some(lp) = local_path {
             PathBuf::from(lp)
         } else {
             skills_lib.join(name)
         };
+
+        // local_path 无效时回退到已有部署的 deploy_path
+        let has_files = src.exists() && walkdir::WalkDir::new(&src)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_type().is_file());
+
+        if !has_files {
+            let fallback: Option<String> = conn.query_row(
+                "SELECT path FROM skill_deployments WHERE skill_id = ?1 AND path IS NOT NULL ORDER BY last_synced DESC LIMIT 1",
+                params![id],
+                |row| row.get(0),
+            ).ok();
+            if let Some(ref dp) = fallback {
+                let dp_path = PathBuf::from(dp);
+                if dp_path.exists() {
+                    info!("[export_skills_to_git] {}: local_path 无效，回退到 deploy_path={}", name, dp);
+                    src = dp_path;
+                }
+            }
+        }
+
         if src.exists() {
             let dest = export_skills_dir.join(name);
             copy_dir_recursive(&src, &dest)?;
@@ -811,13 +833,33 @@ pub async fn check_git_repo_updates(
                 let local_path = skills_lib.join(&skill_name);
 
                 let remote_checksum = compute_dir_checksum(&remote_path);
-                let local_checksum = if local_path.exists() {
-                    compute_dir_checksum(&local_path)
-                } else {
-                    None
+
+                // 优先从 local_path 计算，若为空则回退到 DB 中已有部署的 checksum
+                let local_checksum = {
+                    let lp_cksum = if local_path.exists() {
+                        compute_dir_checksum(&local_path)
+                    } else {
+                        None
+                    };
+                    if lp_cksum.is_some() {
+                        lp_cksum
+                    } else {
+                        // 回退：查 DB 中该 skill 的部署 checksum
+                        let db_conn = pool.get().ok();
+                        db_conn.and_then(|c| {
+                            c.query_row(
+                                "SELECT sd.checksum FROM skill_deployments sd JOIN skills s ON sd.skill_id = s.id WHERE s.name = ?1 AND sd.checksum IS NOT NULL LIMIT 1",
+                                params![skill_name],
+                                |row| row.get::<_, Option<String>>(0),
+                            ).ok().flatten()
+                        })
+                    }
                 };
 
-                let status = if !local_path.exists() {
+                // 判断是否存在于本地（library 或任何部署中）
+                let exists_locally = local_checksum.is_some();
+
+                let status = if !exists_locally {
                     has_updates = true;
                     "new_remote".to_string()
                 } else if remote_checksum == local_checksum {

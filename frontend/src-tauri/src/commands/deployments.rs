@@ -9,6 +9,45 @@ use crate::db::DbPool;
 use crate::error::AppError;
 use crate::models::SkillDeployment;
 
+/// 查找 Skill 的实际源路径：优先 local_path，若不存在则回退到已有部署的 deploy_path
+fn find_skill_source_path(
+    conn: &rusqlite::Connection,
+    skill_id: &str,
+    local_path: &str,
+) -> Result<String, AppError> {
+    let src = Path::new(local_path);
+    if src.exists() && src.is_dir() {
+        // local_path 有效，检查是否有文件
+        let has_files = walkdir::WalkDir::new(src)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_type().is_file());
+        if has_files {
+            return Ok(local_path.to_string());
+        }
+    }
+
+    // 回退：查找已有部署中存在的 deploy_path
+    let fallback: Option<String> = conn.query_row(
+        "SELECT path FROM skill_deployments WHERE skill_id = ?1 AND path IS NOT NULL ORDER BY last_synced DESC LIMIT 1",
+        params![skill_id],
+        |row| row.get(0),
+    ).ok();
+
+    if let Some(ref dp) = fallback {
+        let dp_path = Path::new(dp);
+        if dp_path.exists() && dp_path.is_dir() {
+            info!("[find_skill_source_path] skill={}: local_path 无效，回退到 deploy_path={}", skill_id, dp);
+            return Ok(dp.clone());
+        }
+    }
+
+    Err(AppError::Validation(format!(
+        "Skill 源路径不存在: local_path={}, 也没有可用的部署路径",
+        local_path
+    )))
+}
+
 #[tauri::command]
 pub async fn get_deployments(pool: State<'_, DbPool>) -> Result<Vec<SkillDeployment>, AppError> {
     info!("[get_deployments] 查询所有部署");
@@ -247,13 +286,11 @@ pub async fn deploy_skill_to_project(
         (name, local_path, proj_path)
     };
 
-    let src = Path::new(&skill_local_path);
-    if !src.exists() || !src.is_dir() {
-        return Err(AppError::Validation(format!(
-            "Skill 本地路径不存在: {}，请先确保 Skill 已同步到本地库",
-            skill_local_path
-        )));
-    }
+    let actual_src_path = {
+        let conn = pool.get()?;
+        find_skill_source_path(&conn, &skill_id, &skill_local_path)?
+    };
+    let src = Path::new(&actual_src_path);
 
     let dst = Path::new(&project_path).join(tool_subdir).join(&skill_name);
     let deploy_path = dst.to_string_lossy().to_string();
@@ -376,13 +413,11 @@ pub async fn deploy_skill_global(
         (name, local_path)
     };
 
-    let src = Path::new(&skill_local_path);
-    if !src.exists() || !src.is_dir() {
-        return Err(AppError::Validation(format!(
-            "Skill 本地路径不存在: {}",
-            skill_local_path
-        )));
-    }
+    let actual_src_path = {
+        let conn = pool.get()?;
+        find_skill_source_path(&conn, &skill_id, &skill_local_path)?
+    };
+    let src = Path::new(&actual_src_path);
 
     let dst = home.join(global_subdir).join(&skill_name);
     let deploy_path = dst.to_string_lossy().to_string();
@@ -474,10 +509,10 @@ pub async fn sync_deployment(
 ) -> Result<SyncResult, AppError> {
     info!("[sync_deployment] deployment_id={}", deployment_id);
 
-    let (skill_local_path, deploy_path, old_checksum) = {
+    let (skill_id, skill_local_path, deploy_path, old_checksum) = {
         let conn = pool.get()?;
         conn.query_row(
-            "SELECT s.local_path, sd.path, sd.checksum
+            "SELECT sd.skill_id, s.local_path, sd.path, sd.checksum
              FROM skill_deployments sd
              JOIN skills s ON sd.skill_id = s.id
              WHERE sd.id = ?1",
@@ -485,18 +520,17 @@ pub async fn sync_deployment(
             |row| Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
             )),
         ).map_err(|_| AppError::NotFound(format!("部署记录不存在: {}", deployment_id)))?
     };
 
-    let src = Path::new(&skill_local_path);
-    if !src.exists() || !src.is_dir() {
-        return Err(AppError::Validation(format!(
-            "Skill 本地路径不存在: {}",
-            skill_local_path
-        )));
-    }
+    let actual_src_path = {
+        let conn = pool.get()?;
+        find_skill_source_path(&conn, &skill_id, &skill_local_path)?
+    };
+    let src = Path::new(&actual_src_path);
 
     let dst = Path::new(&deploy_path);
 
@@ -553,10 +587,10 @@ pub async fn check_deployment_consistency(
 ) -> Result<ConsistencyReport, AppError> {
     info!("[check_deployment_consistency] 开始一致性检查");
 
-    let rows: Vec<(String, String, String, String, String)> = {
+    let rows: Vec<(String, String, String, String, Option<String>)> = {
         let conn = pool.get()?;
         let mut stmt = conn.prepare(
-            "SELECT sd.id, s.name, sd.tool, sd.path, s.local_path
+            "SELECT sd.id, s.name, sd.tool, sd.path, sd.checksum
              FROM skill_deployments sd
              JOIN skills s ON sd.skill_id = s.id"
         )?;
@@ -566,7 +600,7 @@ pub async fn check_deployment_consistency(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?.collect::<Result<Vec<_>, _>>()?;
         result
@@ -579,11 +613,9 @@ pub async fn check_deployment_consistency(
     let mut details = Vec::new();
     let mut updates: Vec<(String, String)> = Vec::new();
 
-    for (dep_id, skill_name, tool, deploy_path, local_path) in &rows {
+    for (dep_id, skill_name, tool, deploy_path, db_checksum) in &rows {
         let deploy_dir = Path::new(deploy_path);
-        let lib_dir = Path::new(local_path);
 
-        let lib_checksum = compute_dir_checksum(lib_dir);
         let deploy_checksum = if deploy_dir.exists() {
             compute_dir_checksum(deploy_dir)
         } else {
@@ -593,7 +625,7 @@ pub async fn check_deployment_consistency(
         let status = if !deploy_dir.exists() {
             missing += 1;
             "missing"
-        } else if lib_checksum == deploy_checksum {
+        } else if db_checksum == &deploy_checksum {
             synced += 1;
             "synced"
         } else {
@@ -607,7 +639,7 @@ pub async fn check_deployment_consistency(
             tool: tool.clone(),
             deploy_path: deploy_path.clone(),
             status: status.to_string(),
-            lib_checksum,
+            lib_checksum: db_checksum.clone(),
             deploy_checksum,
         });
 
