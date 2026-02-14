@@ -336,6 +336,130 @@ pub async fn deploy_skill_to_project(
     })
 }
 
+// ── deploy_skill_global (全局部署) ──
+
+const GLOBAL_TOOL_DIRS: &[(&str, &str)] = &[
+    ("windsurf", ".codeium/windsurf/skills"),
+    ("cursor", ".cursor/skills"),
+    ("claude-code", ".claude/skills"),
+    ("codex", ".agents/skills"),
+    ("trae", ".trae/skills"),
+];
+
+fn global_tool_dir(tool: &str) -> Option<&'static str> {
+    GLOBAL_TOOL_DIRS.iter().find(|(t, _)| *t == tool).map(|(_, d)| *d)
+}
+
+#[tauri::command]
+pub async fn deploy_skill_global(
+    skill_id: String,
+    tool: String,
+    force: Option<bool>,
+    pool: State<'_, DbPool>,
+) -> Result<DeployResult, AppError> {
+    let force = force.unwrap_or(false);
+    info!("[deploy_skill_global] skill={}, tool={}, force={}", skill_id, tool, force);
+
+    let global_subdir = global_tool_dir(&tool)
+        .ok_or_else(|| AppError::Validation(format!("不支持的工具: {}", tool)))?;
+
+    let home = dirs::home_dir()
+        .ok_or_else(|| AppError::Internal("无法获取用户主目录".into()))?;
+
+    let (skill_name, skill_local_path) = {
+        let conn = pool.get()?;
+        let (name, local_path): (String, String) = conn.query_row(
+            "SELECT name, local_path FROM skills WHERE id = ?1",
+            params![skill_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).map_err(|_| AppError::NotFound(format!("Skill 不存在: {}", skill_id)))?;
+        (name, local_path)
+    };
+
+    let src = Path::new(&skill_local_path);
+    if !src.exists() || !src.is_dir() {
+        return Err(AppError::Validation(format!(
+            "Skill 本地路径不存在: {}",
+            skill_local_path
+        )));
+    }
+
+    let dst = home.join(global_subdir).join(&skill_name);
+    let deploy_path = dst.to_string_lossy().to_string();
+    let lib_checksum = compute_dir_checksum(src);
+
+    if dst.exists() && dst.is_dir() && !force {
+        let existing_checksum = compute_dir_checksum(&dst);
+        if lib_checksum == existing_checksum {
+            info!("[deploy_skill_global] 目标已存在且内容一致，跳过复制");
+            let deployment_id = Uuid::new_v4().to_string();
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT INTO skill_deployments (id, skill_id, project_id, tool, path, checksum, status, last_synced)
+                 VALUES (?1, ?2, NULL, ?3, ?4, ?5, 'synced', datetime('now'))
+                 ON CONFLICT(skill_id, project_id, tool) DO UPDATE SET
+                    checksum = ?5, status = 'synced', last_synced = datetime('now'), updated_at = datetime('now')",
+                params![deployment_id, skill_id, tool, deploy_path, existing_checksum.clone()],
+            )?;
+            return Ok(DeployResult {
+                deployment_id,
+                files_copied: 0,
+                checksum: existing_checksum.clone(),
+                deploy_path,
+                conflict: Some(DeployConflict {
+                    status: "exists_same".to_string(),
+                    existing_checksum,
+                    library_checksum: lib_checksum,
+                }),
+            });
+        } else if !force {
+            info!("[deploy_skill_global] 目标已存在且内容不同");
+            return Ok(DeployResult {
+                deployment_id: String::new(),
+                files_copied: 0,
+                checksum: None,
+                deploy_path,
+                conflict: Some(DeployConflict {
+                    status: "exists_different".to_string(),
+                    existing_checksum,
+                    library_checksum: lib_checksum,
+                }),
+            });
+        }
+    }
+
+    if dst.exists() && force {
+        info!("[deploy_skill_global] 强制覆盖");
+        std::fs::remove_dir_all(&dst)?;
+    }
+
+    std::fs::create_dir_all(dst.parent().unwrap_or(&dst))?;
+    info!("[deploy_skill_global] 复制: {} -> {}", src.display(), dst.display());
+    let files_copied = copy_dir_recursive(src, &dst)?;
+    let checksum = compute_dir_checksum(&dst);
+    info!("[deploy_skill_global] 完成: {} 个文件, checksum={:?}", files_copied, checksum);
+
+    let deployment_id = Uuid::new_v4().to_string();
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "INSERT INTO skill_deployments (id, skill_id, project_id, tool, path, checksum, status, last_synced)
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, 'synced', datetime('now'))
+             ON CONFLICT(skill_id, project_id, tool) DO UPDATE SET
+                checksum = ?5, status = 'synced', last_synced = datetime('now'), updated_at = datetime('now')",
+            params![deployment_id, skill_id, tool, deploy_path, checksum],
+        )?;
+    }
+
+    Ok(DeployResult {
+        deployment_id,
+        files_copied,
+        checksum,
+        deploy_path,
+        conflict: None,
+    })
+}
+
 #[derive(serde::Serialize)]
 pub struct SyncResult {
     pub files_copied: u64,

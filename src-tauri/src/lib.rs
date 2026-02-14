@@ -88,6 +88,7 @@ pub fn run() {
             commands::deployments::update_deployment_status,
             commands::deployments::get_diverged_deployments,
             commands::deployments::deploy_skill_to_project,
+            commands::deployments::deploy_skill_global,
             commands::deployments::sync_deployment,
             commands::deployments::check_deployment_consistency,
             commands::deployments::get_skills_by_tool,

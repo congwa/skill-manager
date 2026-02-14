@@ -310,6 +310,8 @@ export const deploymentsApi = {
   getDiverged: () => invoke<DeploymentRow[]>('get_diverged_deployments'),
   deployToProject: (skillId: string, projectId: string, tool: string, force?: boolean) =>
     invoke<DeployResultData>('deploy_skill_to_project', { skillId, projectId, tool, force: force ?? false }),
+  deployGlobal: (skillId: string, tool: string, force?: boolean) =>
+    invoke<DeployResultData>('deploy_skill_global', { skillId, tool, force: force ?? false }),
   syncDeployment: (deploymentId: string) =>
     invoke<SyncResultData>('sync_deployment', { deploymentId }),
   checkConsistency: () =>

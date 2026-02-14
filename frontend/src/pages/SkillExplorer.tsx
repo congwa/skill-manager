@@ -13,6 +13,7 @@ import EditorTabs, { type EditorTab } from '@/components/editor/EditorTabs'
 import SkillInfoPanel from '@/components/editor/SkillInfoPanel'
 import EditorStatusBar from '@/components/editor/EditorStatusBar'
 import { useSkillStore } from '@/stores/useSkillStore'
+import { useProjectStore } from '@/stores/useProjectStore'
 import { skillsApi } from '@/lib/tauri-api'
 import { toast } from 'sonner'
 
@@ -28,6 +29,8 @@ interface OpenFile {
 export default function SkillExplorer() {
   const skills = useSkillStore((s) => s.skills)
   const deployments = useSkillStore((s) => s.deployments)
+  const fetchDeployments = useSkillStore((s) => s.fetchDeployments)
+  const projects = useProjectStore((s) => s.projects)
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [skillFilesMap, setSkillFilesMap] = useState<Map<string, string[]>>(new Map())
@@ -209,9 +212,6 @@ export default function SkillExplorer() {
 
   const activeFile = openFiles.find((f) => f.id === activeFileId)
   const selectedSkill = selectedSkillId ? skills.find((s) => s.id === selectedSkillId) : null
-  const selectedSkillDeployCount = selectedSkillId
-    ? deployments.filter((d) => d.skill_id === selectedSkillId).length
-    : 0
 
   const tabs: EditorTab[] = openFiles.map((f) => ({
     id: f.id,
@@ -296,8 +296,10 @@ export default function SkillExplorer() {
                 description: selectedSkill.description,
                 version: selectedSkill.version,
                 local_path: selectedSkill.local_path,
-                deploymentCount: selectedSkillDeployCount,
               } : null}
+              deployments={deployments}
+              projects={projects.map((p) => ({ id: p.id, name: p.name, path: p.path }))}
+              onDeploymentChanged={fetchDeployments}
             />
           </div>
         </div>
