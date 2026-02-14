@@ -5,9 +5,9 @@
     "identifier": "com.congwa.skills-manager",
     "build": {
         "devUrl": "http://localhost:5173",
-        "frontendDist": "../frontend/dist",
-        "beforeDevCommand": "npm run dev --prefix ../frontend",
-        "beforeBuildCommand": "npm run build --prefix ../frontend"
+        "frontendDist": "../dist",
+        "beforeDevCommand": "pnpm run dev",
+        "beforeBuildCommand": "pnpm run build"
     },
     "app": {
         "windows": [
