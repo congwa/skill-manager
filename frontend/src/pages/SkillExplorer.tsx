@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Search, ChevronsUpDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -42,24 +42,26 @@ export default function SkillExplorer() {
   const [expandAll, setExpandAll] = useState(false)
   const [expandKey, setExpandKey] = useState(0)
   const [closeConfirm, setCloseConfirm] = useState<string | null>(null)
+  const deploymentsRef = useRef(deployments)
+  deploymentsRef.current = deployments
 
   // 加载所有 Skill 的文件列表
   useEffect(() => {
     const loadFiles = async () => {
       setLoading(true)
       const map = new Map<string, string[]>()
-      const pathMap = new Map<string, string>() // skillId -> 实际使用的根路径
+      const pMap = new Map<string, string>()
+      const currentDeployments = deploymentsRef.current
       const promises = skills
         .filter((s) => s.local_path)
         .map(async (skill) => {
           let basePath = skill.local_path!
           try {
-            // 优先尝试 local_path（skill 库目录）
             let relFiles = await skillsApi.listFiles(basePath)
 
             // 如果 local_path 为空，回退到部署路径
             if (relFiles.length === 0) {
-              const dep = deployments.find((d) => d.skill_id === skill.id && d.deploy_path)
+              const dep = currentDeployments.find((d) => d.skill_id === skill.id && d.deploy_path)
               if (dep?.deploy_path) {
                 basePath = dep.deploy_path
                 relFiles = await skillsApi.listFiles(basePath)
@@ -70,7 +72,7 @@ export default function SkillExplorer() {
             const absFiles = relFiles.map((f) => `${basePath}/${f}`)
             console.log(`[SkillExplorer] ${skill.name}: ${relFiles.length} files from ${basePath}`)
             map.set(skill.id, absFiles)
-            pathMap.set(skill.id, basePath)
+            pMap.set(skill.id, basePath)
           } catch (err) {
             console.warn(`[SkillExplorer] Failed to list files for ${skill.name}:`, err)
             map.set(skill.id, [])
@@ -78,12 +80,12 @@ export default function SkillExplorer() {
         })
       await Promise.all(promises)
       setSkillFilesMap(map)
-      setSkillPathMap(pathMap)
+      setSkillPathMap(pMap)
       setLoading(false)
     }
     if (skills.length > 0) loadFiles()
     else setLoading(false)
-  }, [skills, deployments])
+  }, [skills])
 
   // 过滤 Skills
   const filteredSkills = skills.filter((s) =>
@@ -243,6 +245,11 @@ export default function SkillExplorer() {
     isDirty: f.isDirty,
   }))
 
+  const handleToggleExpand = useCallback(() => {
+    setExpandAll((prev) => !prev)
+    setExpandKey((k) => k + 1)
+  }, [])
+
   if (loading) {
     return (
       <div className="flex gap-4 h-[calc(100vh-120px)]">
@@ -251,11 +258,6 @@ export default function SkillExplorer() {
       </div>
     )
   }
-
-  const handleToggleExpand = useCallback(() => {
-    setExpandAll((prev) => !prev)
-    setExpandKey((k) => k + 1)
-  }, [])
 
   return (
     <div className="flex flex-col h-[calc(100vh-120px)]">

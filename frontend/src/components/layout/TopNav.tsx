@@ -37,12 +37,14 @@ export function TopNav() {
       <Breadcrumb>
         <BreadcrumbList>
           {crumbs.map((crumb, i) => (
-            <BreadcrumbItem key={crumb.path}>
+            <span key={crumb.path} className="contents">
               {i > 0 && <BreadcrumbSeparator>/</BreadcrumbSeparator>}
-              <BreadcrumbLink href={crumb.path} className="text-cream-600 hover:text-cream-800">
-                {crumb.label}
-              </BreadcrumbLink>
-            </BreadcrumbItem>
+              <BreadcrumbItem>
+                <BreadcrumbLink href={crumb.path} className="text-cream-600 hover:text-cream-800">
+                  {crumb.label}
+                </BreadcrumbLink>
+              </BreadcrumbItem>
+            </span>
           ))}
         </BreadcrumbList>
       </Breadcrumb>
