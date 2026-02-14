@@ -358,7 +358,8 @@ pub async fn reset_app(pool: State<'_, DbPool>) -> Result<(), AppError> {
          DELETE FROM skills;
          DELETE FROM projects;
          DELETE FROM git_export_config;
-         DELETE FROM app_settings;"
+         DELETE FROM app_settings;
+         DELETE FROM schema_version;"
     )?;
 
     tx.commit()?;
