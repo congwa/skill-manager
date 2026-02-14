@@ -187,10 +187,32 @@ pub async fn batch_add_projects(
 pub async fn remove_project(project_id: String, pool: State<'_, DbPool>) -> Result<(), AppError> {
     info!("[remove_project] 删除项目: {}", project_id);
     let conn = pool.get()?;
-    let affected = conn.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
+    let tx = conn.unchecked_transaction()?;
+
+    // 先删除关联的 change_events（通过 deployment_id）
+    let deleted_events: usize = tx.execute(
+        "DELETE FROM change_events WHERE deployment_id IN (
+            SELECT id FROM skill_deployments WHERE project_id = ?1
+        )",
+        params![project_id],
+    )?;
+    info!("[remove_project] 删除关联 change_events: {} 条", deleted_events);
+
+    // 再删除关联的 skill_deployments
+    let deleted_deployments: usize = tx.execute(
+        "DELETE FROM skill_deployments WHERE project_id = ?1",
+        params![project_id],
+    )?;
+    info!("[remove_project] 删除关联 skill_deployments: {} 条", deleted_deployments);
+
+    // 最后删除项目本身
+    let affected = tx.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
     if affected == 0 {
         return Err(AppError::NotFound(format!("项目不存在: {}", project_id)));
     }
+
+    tx.commit()?;
+    info!("[remove_project] 项目已删除: {}", project_id);
     Ok(())
 }
 
