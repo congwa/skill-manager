@@ -205,6 +205,14 @@ pub struct DeployResult {
     pub files_copied: u64,
     pub checksum: Option<String>,
     pub deploy_path: String,
+    pub conflict: Option<DeployConflict>,
+}
+
+#[derive(serde::Serialize)]
+pub struct DeployConflict {
+    pub status: String,       // "exists_same" | "exists_different"
+    pub existing_checksum: Option<String>,
+    pub library_checksum: Option<String>,
 }
 
 #[tauri::command]
@@ -212,9 +220,11 @@ pub async fn deploy_skill_to_project(
     skill_id: String,
     project_id: String,
     tool: String,
+    force: Option<bool>,
     pool: State<'_, DbPool>,
 ) -> Result<DeployResult, AppError> {
-    info!("[deploy_skill_to_project] skill={}, project={}, tool={}", skill_id, project_id, tool);
+    let force = force.unwrap_or(false);
+    info!("[deploy_skill_to_project] skill={}, project={}, tool={}, force={}", skill_id, project_id, tool, force);
 
     let tool_subdir = tool_skill_subdir(&tool)
         .ok_or_else(|| AppError::Validation(format!("不支持的工具: {}", tool)))?;
@@ -246,15 +256,65 @@ pub async fn deploy_skill_to_project(
     }
 
     let dst = Path::new(&project_path).join(tool_subdir).join(&skill_name);
-    info!("[deploy_skill_to_project] 复制文件: {} -> {}", src.display(), dst.display());
+    let deploy_path = dst.to_string_lossy().to_string();
+    let lib_checksum = compute_dir_checksum(src);
 
+    // 冲突检测：目标目录已存在时检查内容是否一致
+    if dst.exists() && dst.is_dir() && !force {
+        let existing_checksum = compute_dir_checksum(&dst);
+        if lib_checksum == existing_checksum {
+            // 内容一致，跳过复制，仅确保数据库记录存在
+            info!("[deploy_skill_to_project] 目标已存在且内容一致，跳过复制");
+            let deployment_id = Uuid::new_v4().to_string();
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT INTO skill_deployments (id, skill_id, project_id, tool, path, checksum, status, last_synced)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'synced', datetime('now'))
+                 ON CONFLICT(skill_id, project_id, tool) DO UPDATE SET
+                    checksum = ?6, status = 'synced', last_synced = datetime('now'), updated_at = datetime('now')",
+                params![deployment_id, skill_id, project_id, tool, deploy_path, existing_checksum.clone()],
+            )?;
+            return Ok(DeployResult {
+                deployment_id,
+                files_copied: 0,
+                checksum: existing_checksum.clone(),
+                deploy_path,
+                conflict: Some(DeployConflict {
+                    status: "exists_same".to_string(),
+                    existing_checksum,
+                    library_checksum: lib_checksum,
+                }),
+            });
+        } else {
+            // 内容不同，返回冲突信息，不覆盖
+            info!("[deploy_skill_to_project] 目标已存在且内容不同，返回冲突信息");
+            return Ok(DeployResult {
+                deployment_id: String::new(),
+                files_copied: 0,
+                checksum: None,
+                deploy_path,
+                conflict: Some(DeployConflict {
+                    status: "exists_different".to_string(),
+                    existing_checksum,
+                    library_checksum: lib_checksum,
+                }),
+            });
+        }
+    }
+
+    // 无冲突或 force=true，执行部署
+    if dst.exists() && force {
+        info!("[deploy_skill_to_project] 强制覆盖目标目录");
+        std::fs::remove_dir_all(&dst)?;
+    }
+
+    info!("[deploy_skill_to_project] 复制文件: {} -> {}", src.display(), dst.display());
     let files_copied = copy_dir_recursive(src, &dst)?;
     let checksum = compute_dir_checksum(&dst);
 
     info!("[deploy_skill_to_project] 复制完成: {} 个文件, checksum={:?}", files_copied, checksum);
 
     let deployment_id = Uuid::new_v4().to_string();
-    let deploy_path = dst.to_string_lossy().to_string();
 
     {
         let conn = pool.get()?;
@@ -272,6 +332,7 @@ pub async fn deploy_skill_to_project(
         files_copied,
         checksum,
         deploy_path,
+        conflict: None,
     })
 }
 
@@ -612,5 +673,161 @@ pub async fn reconcile_all_deployments(
         diverged_detected,
         untracked_found,
         change_events_created,
+    })
+}
+
+// ── 部署→库 回写 ──
+
+#[derive(serde::Serialize)]
+pub struct UpdateLibraryResult {
+    pub skill_id: String,
+    pub skill_name: String,
+    pub backup_id: Option<String>,
+    pub new_checksum: Option<String>,
+    pub other_deployments_synced: usize,
+}
+
+#[tauri::command]
+pub async fn update_library_from_deployment(
+    deployment_id: String,
+    sync_other_deployments: bool,
+    pool: State<'_, DbPool>,
+) -> Result<UpdateLibraryResult, AppError> {
+    info!("[update_library_from_deployment] deployment_id={}, sync_others={}", deployment_id, sync_other_deployments);
+
+    // 1. 查询部署记录和关联 Skill 信息
+    let (skill_id, skill_name, local_path, deploy_path, old_checksum) = {
+        let conn = pool.get()?;
+        conn.query_row(
+            "SELECT sd.skill_id, s.name, s.local_path, sd.path, s.checksum
+             FROM skill_deployments sd
+             JOIN skills s ON sd.skill_id = s.id
+             WHERE sd.id = ?1",
+            params![deployment_id],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            )),
+        ).map_err(|_| AppError::NotFound(format!("部署记录不存在: {}", deployment_id)))?
+    };
+
+    let deploy_dir = Path::new(&deploy_path);
+    if !deploy_dir.exists() || !deploy_dir.is_dir() {
+        return Err(AppError::Validation(format!("部署目录不存在: {}", deploy_path)));
+    }
+
+    let lib_dir = Path::new(&local_path);
+
+    // 2. 备份当前本地 Skill 库版本
+    let backup_id = {
+        let conn = pool.get()?;
+        let backup_base = dirs::home_dir()
+            .unwrap_or_default()
+            .join(".skills-manager")
+            .join("backups")
+            .join(&skill_name);
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+        let backup_path = backup_base.join(&timestamp);
+
+        if lib_dir.exists() {
+            let _ = copy_dir_recursive(lib_dir, &backup_path);
+            let bid = Uuid::new_v4().to_string();
+            let bp_str = backup_path.to_string_lossy().to_string();
+            conn.execute(
+                "INSERT INTO skill_backups (id, skill_id, version_label, backup_path, checksum, reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'before_lib_update')",
+                params![bid, skill_id, timestamp, bp_str, old_checksum],
+            )?;
+            info!("[update_library_from_deployment] 已备份当前库版本: {}", bp_str);
+            Some(bid)
+        } else {
+            None
+        }
+    };
+
+    // 3. 用部署目录内容覆盖本地 Skill 库
+    if lib_dir.exists() {
+        std::fs::remove_dir_all(lib_dir)?;
+    }
+    let files_copied = copy_dir_recursive(deploy_dir, lib_dir)?;
+    let new_checksum = compute_dir_checksum(lib_dir);
+
+    info!("[update_library_from_deployment] 回写完成: {} 个文件, checksum={:?}", files_copied, new_checksum);
+
+    // 4. 更新数据库
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "UPDATE skills SET checksum = ?1, last_modified = datetime('now'), updated_at = datetime('now')
+             WHERE id = ?2",
+            params![new_checksum, skill_id],
+        )?;
+        conn.execute(
+            "UPDATE skill_sources SET original_checksum = ?1, updated_at = datetime('now')
+             WHERE skill_id = ?2",
+            params![new_checksum, skill_id],
+        )?;
+        // 更新当前部署记录为 synced
+        conn.execute(
+            "UPDATE skill_deployments SET checksum = ?1, status = 'synced',
+                    last_synced = datetime('now'), updated_at = datetime('now')
+             WHERE id = ?2",
+            params![new_checksum, deployment_id],
+        )?;
+    }
+
+    // 5. 可选：同步到其他部署位置
+    let mut other_deployments_synced = 0usize;
+    if sync_other_deployments {
+        let other_deploys: Vec<(String, String)> = {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare(
+                "SELECT id, path FROM skill_deployments WHERE skill_id = ?1 AND id != ?2"
+            )?;
+            let result = stmt.query_map(params![skill_id, deployment_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?.collect::<Result<Vec<_>, _>>()?;
+            result
+        };
+
+        for (dep_id, dep_path) in &other_deploys {
+            let dst = Path::new(dep_path);
+            if dst.exists() {
+                let _ = std::fs::remove_dir_all(dst);
+            }
+            let _ = copy_dir_recursive(lib_dir, dst);
+            let dep_checksum = compute_dir_checksum(dst);
+
+            let conn = pool.get()?;
+            conn.execute(
+                "UPDATE skill_deployments SET checksum = ?1, status = 'synced',
+                        last_synced = datetime('now'), updated_at = datetime('now')
+                 WHERE id = ?2",
+                params![dep_checksum, dep_id],
+            )?;
+            other_deployments_synced += 1;
+        }
+        info!("[update_library_from_deployment] 已同步 {} 个其他部署", other_deployments_synced);
+    }
+
+    // 6. 写入同步历史
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "INSERT INTO sync_history (id, skill_id, deployment_id, action, from_checksum, to_checksum, status, created_at)
+             VALUES (?1, ?2, ?3, 'lib_update', ?4, ?5, 'success', datetime('now'))",
+            params![Uuid::new_v4().to_string(), skill_id, deployment_id, old_checksum, new_checksum],
+        )?;
+    }
+
+    Ok(UpdateLibraryResult {
+        skill_id,
+        skill_name,
+        backup_id,
+        new_checksum,
+        other_deployments_synced,
     })
 }

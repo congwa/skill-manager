@@ -49,6 +49,8 @@ export default function Settings() {
   const [clearOpen, setClearOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [savedField, setSavedField] = useState<string | null>(null)
+  const [githubToken, setGithubToken] = useState('')
+  const [tokenSaving, setTokenSaving] = useState(false)
 
   const showSaved = (field: string) => {
     setSavedField(field)
@@ -311,6 +313,43 @@ export default function Settings() {
                 <div className="flex items-center justify-between">
                   <div><Label>自动更新</Label><p className="text-xs text-cream-500 mt-0.5">发现新版本时自动更新（仅本地 Skill 库）</p></div>
                   <Switch checked={settings.auto_update} onCheckedChange={(v) => updateSettings({ auto_update: v })} />
+                </div>
+                <div className="border-t border-cream-200 pt-5 space-y-3">
+                  <div>
+                    <Label>GitHub Token (skills.sh)</Label>
+                    <p className="text-xs text-cream-500 mt-0.5">
+                      用于 skills.sh 搜索和安装，无 Token 时 API 限制 60 次/小时，有 Token 提升至 5000 次/小时
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="password"
+                      placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                      value={githubToken}
+                      onChange={(e) => setGithubToken(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={tokenSaving}
+                      onClick={async () => {
+                        setTokenSaving(true)
+                        try {
+                          await settingsApi.set('github_token', githubToken)
+                          toast.success('GitHub Token 已保存')
+                          showSaved('token')
+                        } catch (e) {
+                          toast.error('保存失败: ' + String(e))
+                        } finally {
+                          setTokenSaving(false)
+                        }
+                      }}
+                    >
+                      {tokenSaving ? '保存中...' : '保存'}
+                    </Button>
+                    {savedField === 'token' && <Check className="h-4 w-4 text-mint-500 animate-in fade-in" />}
+                  </div>
                 </div>
               </CardContent>
             </Card>

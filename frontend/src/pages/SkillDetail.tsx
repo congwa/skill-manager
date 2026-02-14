@@ -33,6 +33,7 @@ export default function SkillDetail() {
   const [activeTab, setActiveTab] = useState('content')
   const [skillContent, setSkillContent] = useState<string | null>(null)
   const [skillFiles, setSkillFiles] = useState<string[]>([])
+  const [restoring, setRestoring] = useState<string | null>(null)
 
   useState(() => {
     if (skill?.local_path) {
@@ -268,7 +269,34 @@ export default function SkillDetail() {
                           <p className="text-xs text-cream-500">{backup.reason}</p>
                         </div>
                         <span className="text-xs text-cream-400">{relativeTime(backup.created_at)}</span>
-                        <Button variant="ghost" size="sm" className="text-xs">恢复此版本</Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs"
+                          disabled={restoring === backup.id}
+                          onClick={async () => {
+                            setRestoring(backup.id)
+                            try {
+                              console.log(`[SkillDetail] 恢复备份: ${backup.id}`)
+                              const result = await skillsApi.restoreFromBackup(backup.id, true)
+                              console.log(`[SkillDetail] 恢复完成: version=${result.restored_version}, synced=${result.deployments_synced}`)
+                              await useSkillStore.getState().fetchSkills()
+                              await useSkillStore.getState().fetchDeployments()
+                              await useSkillStore.getState().fetchBackups(skillId!)
+                              toast.success(`已恢复到 ${backup.version || '此版本'}，${result.deployments_synced} 个部署已同步`)
+                              if (skill?.local_path) {
+                                skillsApi.readFile(skill.local_path + '/SKILL.md').then(setSkillContent).catch(() => {})
+                              }
+                            } catch (e) {
+                              console.error('[SkillDetail] 恢复失败:', e)
+                              toast.error('恢复失败: ' + String(e))
+                            } finally {
+                              setRestoring(null)
+                            }
+                          }}
+                        >
+                          {restoring === backup.id ? '恢复中...' : '恢复此版本'}
+                        </Button>
                       </motion.div>
                     ))}
                   </div>

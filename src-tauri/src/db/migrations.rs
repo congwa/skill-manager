@@ -159,6 +159,14 @@ const MIGRATIONS: &[Migration] = &[
                 ('onboarding_completed', 'false');
         ",
     },
+    Migration {
+        version: 2,
+        name: "add_remote_sha_to_skill_sources",
+        up: "
+            ALTER TABLE skill_sources ADD COLUMN remote_sha TEXT;
+            ALTER TABLE skill_sources ADD COLUMN skill_path TEXT;
+        ",
+    },
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

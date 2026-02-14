@@ -41,7 +41,7 @@ pub fn run() {
 
             // 启动文件系统监听
             info!("[启动] 启动文件系统监听...");
-            let _watcher = commands::watcher::start_file_watcher(watcher_pool);
+            let _watcher = commands::watcher::start_file_watcher(watcher_pool, app.handle().clone());
             if _watcher.is_some() {
                 // 将 watcher 存入 app state 以保持其存活
                 app.manage(_watcher);
@@ -73,6 +73,7 @@ pub fn run() {
             commands::skills::list_skill_files,
             commands::skills::check_skill_updates,
             commands::skills::update_skill_from_library,
+            commands::skills::restore_from_backup,
             // Deployments
             commands::deployments::get_deployments,
             commands::deployments::get_skill_deployments,
@@ -84,6 +85,7 @@ pub fn run() {
             commands::deployments::sync_deployment,
             commands::deployments::check_deployment_consistency,
             commands::deployments::reconcile_all_deployments,
+            commands::deployments::update_library_from_deployment,
             // Settings
             commands::settings::get_all_settings,
             commands::settings::get_setting,
@@ -106,6 +108,12 @@ pub fn run() {
             commands::git::export_skills_to_git,
             commands::git::clone_git_repo,
             commands::git::import_from_git_repo,
+            // skills.sh
+            commands::skillssh::search_skills_sh,
+            commands::skillssh::get_skill_repo_tree,
+            commands::skillssh::fetch_skill_content,
+            commands::skillssh::install_from_skills_sh,
+            commands::skillssh::check_remote_updates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 use uuid::Uuid;
+use tauri::AppHandle;
+use tauri::Emitter;
 
 use crate::db::DbPool;
 
@@ -48,8 +50,8 @@ fn collect_watch_paths(pool: &DbPool) -> Vec<PathBuf> {
     paths
 }
 
-/// 处理文件变更事件，写入 change_events 表
-fn handle_fs_event(event: &Event, pool: &DbPool) {
+/// 处理文件变更事件，写入 change_events 表并 emit Tauri Event
+fn handle_fs_event(event: &Event, pool: &DbPool, app_handle: &AppHandle) {
     let dominated_paths: Vec<String> = event
         .paths
         .iter()
@@ -82,17 +84,26 @@ fn handle_fs_event(event: &Event, pool: &DbPool) {
             let dep_id = deployment_id.unwrap_or_else(|| path_str.clone());
             let event_id = Uuid::new_v4().to_string();
 
-            let _ = conn.execute(
+            let inserted = conn.execute(
                 "INSERT INTO change_events (id, deployment_id, event_type, old_checksum, new_checksum, resolution)
                  VALUES (?1, ?2, ?3, NULL, NULL, 'pending')",
                 params![event_id, dep_id, event_type],
             );
+
+            if inserted.is_ok() {
+                let _ = app_handle.emit("skill-change", serde_json::json!({
+                    "event_id": event_id,
+                    "event_type": event_type,
+                    "path": path_str,
+                    "deployment_id": dep_id,
+                }));
+            }
         }
     }
 }
 
 /// 启动文件系统监听，返回 watcher 实例（需保持存活）
-pub fn start_file_watcher(pool: DbPool) -> Option<RecommendedWatcher> {
+pub fn start_file_watcher(pool: DbPool, app_handle: AppHandle) -> Option<RecommendedWatcher> {
     let watch_paths = collect_watch_paths(&pool);
 
     if watch_paths.is_empty() {
@@ -134,7 +145,7 @@ pub fn start_file_watcher(pool: DbPool) -> Option<RecommendedWatcher> {
         info!("[watcher] 后台事件处理线程已启动");
         loop {
             match rx.recv_timeout(Duration::from_secs(5)) {
-                Ok(event) => handle_fs_event(&event, &pool),
+                Ok(event) => handle_fs_event(&event, &pool, &app_handle),
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     info!("[watcher] 通道已断开，停止监听");

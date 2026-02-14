@@ -99,6 +99,15 @@ export const skillsApi = {
   checkUpdates: () => invoke<SkillUpdateInfoRow[]>('check_skill_updates'),
   updateFromLibrary: (skillId: string, syncDeployments: boolean) =>
     invoke<SkillUpdateResultRow>('update_skill_from_library', { skillId, syncDeployments }),
+  restoreFromBackup: (backupId: string, syncDeployments: boolean) =>
+    invoke<RestoreResultRow>('restore_from_backup', { backupId, syncDeployments }),
+}
+
+export interface RestoreResultRow {
+  skill_id: string
+  restored_version: string | null
+  new_checksum: string | null
+  deployments_synced: number
 }
 
 export interface SkillUpdateInfoRow {
@@ -136,11 +145,18 @@ export interface DeploymentRow {
   updated_at: string
 }
 
+export interface DeployConflictData {
+  status: string  // "exists_same" | "exists_different"
+  existing_checksum: string | null
+  library_checksum: string | null
+}
+
 export interface DeployResultData {
   deployment_id: string
   files_copied: number
   checksum: string | null
   deploy_path: string
+  conflict: DeployConflictData | null
 }
 
 export interface SyncResultData {
@@ -190,14 +206,24 @@ export const deploymentsApi = {
   updateStatus: (deploymentId: string, status: string, checksum: string | null) =>
     invoke<void>('update_deployment_status', { deploymentId, status, checksum }),
   getDiverged: () => invoke<DeploymentRow[]>('get_diverged_deployments'),
-  deployToProject: (skillId: string, projectId: string, tool: string) =>
-    invoke<DeployResultData>('deploy_skill_to_project', { skillId, projectId, tool }),
+  deployToProject: (skillId: string, projectId: string, tool: string, force?: boolean) =>
+    invoke<DeployResultData>('deploy_skill_to_project', { skillId, projectId, tool, force: force ?? false }),
   syncDeployment: (deploymentId: string) =>
     invoke<SyncResultData>('sync_deployment', { deploymentId }),
   checkConsistency: () =>
     invoke<ConsistencyReportData>('check_deployment_consistency'),
   reconcile: () =>
     invoke<ReconcileReportData>('reconcile_all_deployments'),
+  updateLibraryFromDeployment: (deploymentId: string, syncOtherDeployments: boolean) =>
+    invoke<UpdateLibraryResultData>('update_library_from_deployment', { deploymentId, syncOtherDeployments }),
+}
+
+export interface UpdateLibraryResultData {
+  skill_id: string
+  skill_name: string
+  backup_id: string | null
+  new_checksum: string | null
+  other_deployments_synced: number
 }
 
 // ── Settings ──
@@ -357,6 +383,89 @@ export const gitApi = {
     invoke<GitExportResult>('export_skills_to_git', { configId }),
   cloneRepo: (remoteUrl: string, branch?: string) =>
     invoke<GitCloneResult>('clone_git_repo', { remoteUrl, branch }),
-  importFromRepo: (clonePath: string, skillNames: string[], overwriteConflicts: boolean) =>
-    invoke<GitImportResult>('import_from_git_repo', { clonePath, skillNames, overwriteConflicts }),
+  importFromRepo: (clonePath: string, skillNames: string[], overwriteConflicts: boolean, sourceUrl?: string) =>
+    invoke<GitImportResult>('import_from_git_repo', { clonePath, skillNames, overwriteConflicts, sourceUrl: sourceUrl ?? null }),
+}
+
+// ── skills.sh ──
+
+export interface SkillsShSearchResult {
+  id: string
+  skill_id: string
+  name: string
+  installs: number
+  source: string
+}
+
+export interface RepoFileEntry {
+  path: string
+  sha: string
+  size: number | null
+}
+
+export interface RepoSkillEntry {
+  skill_path: string
+  folder_sha: string
+  file_count: number
+  files: RepoFileEntry[]
+}
+
+export interface RepoTreeResult {
+  owner_repo: string
+  branch: string
+  skills: RepoSkillEntry[]
+}
+
+export interface DeployTargetParam {
+  project_id: string | null
+  tool: string
+}
+
+export interface InstallConflict {
+  conflict_type: string
+  local_version: string | null
+  local_checksum: string | null
+}
+
+export interface SkillsShInstallResult {
+  skill_id: string
+  local_path: string
+  files_downloaded: number
+  deployments_created: number
+  conflict: InstallConflict | null
+}
+
+export interface RemoteUpdateInfo {
+  skill_id: string
+  skill_name: string
+  current_version: string | null
+  source_url: string | null
+  owner_repo: string
+  skill_path: string
+  local_sha: string | null
+  remote_sha: string
+  has_update: boolean
+  locally_modified: boolean
+  deploy_count: number
+}
+
+export const skillsShApi = {
+  search: (query: string, limit?: number) =>
+    invoke<SkillsShSearchResult[]>('search_skills_sh', { query, limit }),
+  getRepoTree: (ownerRepo: string, token?: string) =>
+    invoke<RepoTreeResult>('get_skill_repo_tree', { ownerRepo, token }),
+  fetchContent: (ownerRepo: string, blobSha: string, token?: string) =>
+    invoke<string>('fetch_skill_content', { ownerRepo, blobSha, token }),
+  install: (params: {
+    ownerRepo: string
+    skillPath: string
+    skillName: string
+    folderSha: string
+    files: RepoFileEntry[]
+    token?: string
+    deployTargets: DeployTargetParam[]
+    forceOverwrite?: boolean
+  }) => invoke<SkillsShInstallResult>('install_from_skills_sh', params),
+  checkRemoteUpdates: () =>
+    invoke<RemoteUpdateInfo[]>('check_remote_updates'),
 }

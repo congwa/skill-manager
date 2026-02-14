@@ -152,7 +152,7 @@ pub async fn scan_and_import_project(
 }
 
 const GLOBAL_TOOL_DIRS: &[(&str, &str)] = &[
-    ("windsurf", ".windsurf/skills"),
+    ("windsurf", ".codeium/windsurf/skills"),
     ("cursor", ".cursor/skills"),
     ("claude-code", ".claude/skills"),
     ("codex", ".agents/skills"),

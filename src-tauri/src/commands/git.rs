@@ -374,7 +374,7 @@ pub async fn clone_git_repo(
     }
 
     let branch_str = branch.unwrap_or_else(|| "main".to_string());
-    let (ok, msg) = run_git_allow_fail(
+    let (ok, _msg) = run_git_allow_fail(
         &[
             "clone",
             "--branch",
@@ -445,7 +445,7 @@ pub async fn clone_git_repo(
                 )
                 .ok();
 
-            let status = if let Some((_local_id, local_ver)) = &local {
+            let status = if let Some((_local_id, _local_ver)) = &local {
                 // 比较 checksum
                 let repo_checksum = compute_dir_checksum(&path).unwrap_or_default();
                 let local_skill_path = get_skills_lib_path(&pool)?.join(&name);
@@ -491,12 +491,18 @@ pub async fn import_from_git_repo(
     clone_path: String,
     skill_names: Vec<String>,
     overwrite_conflicts: bool,
+    source_url: Option<String>,
     pool: State<'_, DbPool>,
 ) -> Result<GitImportResult, AppError> {
     info!(
-        "[import_from_git_repo] 导入: path={}, skills={:?}, overwrite={}",
-        clone_path, skill_names, overwrite_conflicts
+        "[import_from_git_repo] 导入: path={}, skills={:?}, overwrite={}, source_url={:?}",
+        clone_path, skill_names, overwrite_conflicts, source_url
     );
+
+    // 推断 source_type
+    let source_type = source_url.as_deref().map(|u| {
+        if u.contains("gitee") { "gitee" } else { "github" }
+    }).unwrap_or("git");
 
     let clone_dir = PathBuf::from(&clone_path);
     let skills_dir = clone_dir.join("skills");
@@ -574,6 +580,14 @@ pub async fn import_from_git_repo(
                     dest.to_string_lossy().to_string()
                 ],
             )?;
+            // 更新 skill_sources 记录
+            conn.execute(
+                "INSERT INTO skill_sources (id, skill_id, source_type, source_url, installed_version, original_checksum)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(skill_id) DO UPDATE SET
+                    source_url = COALESCE(?4, source_url), original_checksum = ?6, updated_at = datetime('now')",
+                params![Uuid::new_v4().to_string(), skill_id, source_type, source_url, version, new_checksum],
+            )?;
             updated += 1;
             info!("[import_from_git_repo] 更新 Skill: {}", name);
         } else {
@@ -593,8 +607,17 @@ pub async fn import_from_git_repo(
                     dest.to_string_lossy().to_string()
                 ],
             )?;
+            // 创建 skill_sources 记录
+            let source_id = Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO skill_sources (id, skill_id, source_type, source_url, installed_version, original_checksum)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(skill_id) DO UPDATE SET
+                    source_type = ?3, source_url = ?4, installed_version = ?5, original_checksum = ?6, updated_at = datetime('now')",
+                params![source_id, skill_id, source_type, source_url, version, checksum],
+            )?;
             imported += 1;
-            info!("[import_from_git_repo] 导入新 Skill: {}", name);
+            info!("[import_from_git_repo] 导入新 Skill: {} (source={})", name, source_type);
         }
     }
 

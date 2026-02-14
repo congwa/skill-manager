@@ -40,8 +40,86 @@ pub struct SkillSource {
     pub url: Option<String>,
     pub installed_version: Option<String>,
     pub original_checksum: Option<String>,
+    pub remote_sha: Option<String>,
+    pub skill_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+// ── skills.sh Search Results ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillsShSearchResult {
+    pub id: String,
+    pub skill_id: String,
+    pub name: String,
+    pub installs: u64,
+    pub source: String,
+}
+
+// ── Repository Tree ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoTreeResult {
+    pub owner_repo: String,
+    pub branch: String,
+    pub skills: Vec<RepoSkillEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoSkillEntry {
+    pub skill_path: String,
+    pub folder_sha: String,
+    pub file_count: usize,
+    pub files: Vec<RepoFileEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoFileEntry {
+    pub path: String,
+    pub sha: String,
+    pub size: Option<u64>,
+}
+
+// ── skills.sh Install ──
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployTarget {
+    pub project_id: Option<String>,
+    pub tool: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillsShInstallResult {
+    pub skill_id: String,
+    pub local_path: String,
+    pub files_downloaded: usize,
+    pub deployments_created: usize,
+    pub conflict: Option<InstallConflict>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallConflict {
+    pub conflict_type: String,
+    pub local_version: Option<String>,
+    pub local_checksum: Option<String>,
+}
+
+// ── Remote Update Check ──
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RemoteUpdateInfo {
+    pub skill_id: String,
+    pub skill_name: String,
+    pub current_version: Option<String>,
+    pub source_url: Option<String>,
+    pub owner_repo: String,
+    pub skill_path: String,
+    pub local_sha: Option<String>,
+    pub remote_sha: String,
+    pub has_update: bool,
+    pub locally_modified: bool,
+    pub deploy_count: i64,
 }
 
 // ── Skill Deployments ──

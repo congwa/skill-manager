@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Search, Download, Package, FolderOpen } from 'lucide-react'
+import { Search, Download, Package, FolderOpen, Globe, HardDrive } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn, toolNames, sourceLabels } from '@/lib/utils'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { useProjectStore } from '@/stores/useProjectStore'
@@ -19,6 +20,7 @@ import {
   DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import type { ToolName } from '@/types'
+import SkillsShSearch from '@/components/skillssh/SkillsShSearch'
 
 const sourceFilters = ['全部', 'local', 'skills-sh', 'github', 'gitee']
 const TOOLS: ToolName[] = ['windsurf', 'cursor', 'claude-code', 'codex', 'trae']
@@ -27,6 +29,7 @@ export default function SkillsStore() {
   const skills = useSkillStore((s) => s.skills)
   const deployments = useSkillStore((s) => s.deployments)
   const projects = useProjectStore((s) => s.projects)
+  const [activeTab, setActiveTab] = useState('store')
   const [searchQuery, setSearchQuery] = useState('')
   const [sourceFilter, setSourceFilter] = useState('全部')
   const [deploying, setDeploying] = useState<string | null>(null)
@@ -47,16 +50,34 @@ export default function SkillsStore() {
 
   const getDeployCount = (skillId: string) => deployments.filter((d) => d.skill_id === skillId).length
 
-  const handleDeployConfirm = async () => {
+  const handleDeployConfirm = async (force = false) => {
     if (!deployDialog || !selectedProject) return
     setDeploying(deployDialog.skillId)
     try {
-      console.log(`[SkillsStore] 部署 ${deployDialog.skillName} -> project=${selectedProject}, tool=${selectedTool}`)
-      const result = await deploymentsApi.deployToProject(deployDialog.skillId, selectedProject, selectedTool)
-      console.log(`[SkillsStore] 部署完成: ${result.files_copied} 个文件`)
-      await useSkillStore.getState().fetchDeployments()
-      toast.success(`${deployDialog.skillName} 已部署到项目，共 ${result.files_copied} 个文件`)
-      setDeployDialog(null)
+      console.log(`[SkillsStore] 部署 ${deployDialog.skillName} -> project=${selectedProject}, tool=${selectedTool}, force=${force}`)
+      const result = await deploymentsApi.deployToProject(deployDialog.skillId, selectedProject, selectedTool, force)
+
+      if (result.conflict) {
+        if (result.conflict.status === 'exists_same') {
+          await useSkillStore.getState().fetchDeployments()
+          toast.info(`${deployDialog.skillName} 在目标位置已存在且内容一致，已更新数据库记录`)
+          setDeployDialog(null)
+        } else if (result.conflict.status === 'exists_different') {
+          toast.warning(`目标位置已存在不同内容的 ${deployDialog.skillName}`, {
+            description: '点击"强制覆盖"用本地库版本覆盖目标，或取消操作',
+            action: {
+              label: '强制覆盖',
+              onClick: () => handleDeployConfirm(true),
+            },
+            duration: 10000,
+          })
+        }
+      } else {
+        console.log(`[SkillsStore] 部署完成: ${result.files_copied} 个文件`)
+        await useSkillStore.getState().fetchDeployments()
+        toast.success(`${deployDialog.skillName} 已部署到项目，共 ${result.files_copied} 个文件`)
+        setDeployDialog(null)
+      }
     } catch (e) {
       console.error('[SkillsStore] 部署失败:', e)
       toast.error('部署失败: ' + String(e))
@@ -66,128 +87,150 @@ export default function SkillsStore() {
   }
 
   return (
-    <div className="space-y-8">
-      {/* 大搜索框 */}
-      <div className="text-center space-y-4">
-        <h1 className="text-3xl font-display font-bold text-cream-800">Skill 库</h1>
-        <p className="text-cream-500">浏览和部署本地 Skill 到项目</p>
-        <div className="relative max-w-lg mx-auto">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-cream-400" />
-          <Input
-            placeholder="搜索 Skill..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-12 h-12 rounded-full border-cream-300 shadow-card text-base"
-          />
-        </div>
+    <div className="space-y-6">
+      {/* 页面标题 */}
+      <div className="text-center space-y-2">
+        <h1 className="text-3xl font-display font-bold text-cream-800">Skill 仓库</h1>
+        <p className="text-cream-500">浏览在线 Skill 商城或管理本地 Skill 库</p>
       </div>
 
-      {/* 高部署量排行 */}
-      {!searchQuery && topSkills.length > 0 && (
-        <div>
-          <h2 className="text-lg font-display font-bold text-cream-800 mb-4">� 部署最多的 Skill</h2>
-          <ScrollArea className="w-full">
-            <div className="flex gap-4 pb-4">
-              {topSkills.map((skill, i) => {
-                const src = sourceLabels[skill.source]
-                return (
-                  <motion.div
-                    key={skill.id}
-                    className="store-card shrink-0 w-64"
-                    whileHover={{ scale: 1.03, y: -4 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-                  >
-                    <Card className="border border-cream-200 shadow-card hover:shadow-card-hover transition-shadow h-full">
-                      <CardContent className="p-4 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <Badge variant="secondary" className="bg-peach-100 text-peach-700 text-xs">#{i + 1}</Badge>
-                          <Badge variant="outline" className={cn('text-xs', src.bg, src.text)}>{src.label}</Badge>
-                        </div>
-                        <h3 className="font-semibold text-cream-800">{skill.name}</h3>
-                        <p className="text-xs text-cream-500 line-clamp-2">{skill.description}</p>
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-cream-400">
-                            <Package className="h-3 w-3 inline mr-1" />{skill.deployCount} 个部署
-                          </span>
-                          <Button size="sm" className="text-xs h-7 bg-peach-500 hover:bg-peach-600 text-white"
-                            onClick={() => setDeployDialog({ skillId: skill.id, skillName: skill.name })}>
-                            <FolderOpen className="h-3 w-3 mr-1" /> 部署
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </motion.div>
-                )
-              })}
+      {/* Tab 切换 */}
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="bg-cream-100 mx-auto flex w-fit">
+          <TabsTrigger value="store" className="gap-1.5">
+            <Globe className="h-4 w-4" /> skills.sh 商城
+          </TabsTrigger>
+          <TabsTrigger value="local" className="gap-1.5">
+            <HardDrive className="h-4 w-4" /> 本地 Skill 库
+          </TabsTrigger>
+        </TabsList>
+
+        {/* skills.sh 商城 Tab */}
+        <TabsContent value="store" className="mt-6">
+          <SkillsShSearch />
+        </TabsContent>
+
+        {/* 本地 Skill 库 Tab */}
+        <TabsContent value="local" className="mt-6 space-y-8">
+          {/* 搜索框 */}
+          <div className="relative max-w-lg mx-auto">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-cream-400" />
+            <Input
+              placeholder="搜索本地 Skill..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-12 h-12 rounded-full border-cream-300 shadow-card text-base"
+            />
+          </div>
+
+          {/* 高部署量排行 */}
+          {!searchQuery && topSkills.length > 0 && (
+            <div>
+              <h2 className="text-lg font-display font-bold text-cream-800 mb-4">部署最多的 Skill</h2>
+              <ScrollArea className="w-full">
+                <div className="flex gap-4 pb-4">
+                  {topSkills.map((skill, i) => {
+                    const src = sourceLabels[skill.source]
+                    return (
+                      <motion.div
+                        key={skill.id}
+                        className="store-card shrink-0 w-64"
+                        whileHover={{ scale: 1.03, y: -4 }}
+                        transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                      >
+                        <Card className="border border-cream-200 shadow-card hover:shadow-card-hover transition-shadow h-full">
+                          <CardContent className="p-4 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <Badge variant="secondary" className="bg-peach-100 text-peach-700 text-xs">#{i + 1}</Badge>
+                              <Badge variant="outline" className={cn('text-xs', src.bg, src.text)}>{src.label}</Badge>
+                            </div>
+                            <h3 className="font-semibold text-cream-800">{skill.name}</h3>
+                            <p className="text-xs text-cream-500 line-clamp-2">{skill.description}</p>
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-cream-400">
+                                <Package className="h-3 w-3 inline mr-1" />{skill.deployCount} 个部署
+                              </span>
+                              <Button size="sm" className="text-xs h-7 bg-peach-500 hover:bg-peach-600 text-white"
+                                onClick={() => setDeployDialog({ skillId: skill.id, skillName: skill.name })}>
+                                <FolderOpen className="h-3 w-3 mr-1" /> 部署
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </motion.div>
+                    )
+                  })}
+                </div>
+                <ScrollBar orientation="horizontal" />
+              </ScrollArea>
             </div>
-            <ScrollBar orientation="horizontal" />
-          </ScrollArea>
-        </div>
-      )}
+          )}
 
-      {/* 来源筛选 */}
-      <div className="flex gap-2 flex-wrap">
-        {sourceFilters.map((f) => (
-          <Button
-            key={f}
-            variant={sourceFilter === f ? 'default' : 'outline'}
-            size="sm"
-            className={cn(
-              'rounded-full text-xs',
-              sourceFilter === f ? 'bg-peach-500 hover:bg-peach-600 text-white' : 'border-cream-300'
-            )}
-            onClick={() => setSourceFilter(f)}
-          >
-            {f === '全部' ? '全部' : (sourceLabels as Record<string, { label: string }>)[f]?.label ?? f}
-          </Button>
-        ))}
-      </div>
+          {/* 来源筛选 */}
+          <div className="flex gap-2 flex-wrap">
+            {sourceFilters.map((f) => (
+              <Button
+                key={f}
+                variant={sourceFilter === f ? 'default' : 'outline'}
+                size="sm"
+                className={cn(
+                  'rounded-full text-xs',
+                  sourceFilter === f ? 'bg-peach-500 hover:bg-peach-600 text-white' : 'border-cream-300'
+                )}
+                onClick={() => setSourceFilter(f)}
+              >
+                {f === '全部' ? '全部' : (sourceLabels as Record<string, { label: string }>)[f]?.label ?? f}
+              </Button>
+            ))}
+          </div>
 
-      {/* Skill 列表网格 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {filtered.map((skill) => {
-          const src = sourceLabels[skill.source]
-          const depCount = getDeployCount(skill.id)
-          return (
-            <motion.div key={skill.id} className="category-card" whileHover={{ scale: 1.02 }}>
-              <Card className="border border-cream-200 shadow-card hover:shadow-card-hover transition-shadow h-full">
-                <CardContent className="p-5 space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <h3 className="font-semibold text-cream-800">{skill.name}</h3>
-                      <p className="text-xs text-cream-500 mt-1">{skill.description}</p>
-                    </div>
-                    {skill.version && (
-                      <Badge variant="outline" className="bg-lavender-50 text-lavender-400 text-xs shrink-0">
-                        v{skill.version}
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="flex items-center justify-between pt-2">
-                    <div className="flex items-center gap-3">
-                      <Badge variant="outline" className={cn('text-xs', src?.bg, src?.text)}>{src?.label ?? skill.source}</Badge>
-                      <span className="text-xs text-cream-400"><Package className="h-3 w-3 inline mr-1" />{depCount} 个部署</span>
-                    </div>
-                    <Button size="sm" className="text-xs h-7 bg-peach-500 hover:bg-peach-600 text-white"
-                      onClick={() => setDeployDialog({ skillId: skill.id, skillName: skill.name })}
-                      disabled={deploying === skill.id}>
-                      <Download className="h-3 w-3 mr-1" /> {deploying === skill.id ? '部署中...' : '部署到项目'}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            </motion.div>
-          )
-        })}
-      </div>
+          {/* Skill 列表网格 */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {filtered.map((skill) => {
+              const src = sourceLabels[skill.source]
+              const depCount = getDeployCount(skill.id)
+              return (
+                <motion.div key={skill.id} className="category-card" whileHover={{ scale: 1.02 }}>
+                  <Card className="border border-cream-200 shadow-card hover:shadow-card-hover transition-shadow h-full">
+                    <CardContent className="p-5 space-y-3">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <h3 className="font-semibold text-cream-800">{skill.name}</h3>
+                          <p className="text-xs text-cream-500 mt-1">{skill.description}</p>
+                        </div>
+                        {skill.version && (
+                          <Badge variant="outline" className="bg-lavender-50 text-lavender-400 text-xs shrink-0">
+                            v{skill.version}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between pt-2">
+                        <div className="flex items-center gap-3">
+                          <Badge variant="outline" className={cn('text-xs', src?.bg, src?.text)}>{src?.label ?? skill.source}</Badge>
+                          <span className="text-xs text-cream-400"><Package className="h-3 w-3 inline mr-1" />{depCount} 个部署</span>
+                        </div>
+                        <Button size="sm" className="text-xs h-7 bg-peach-500 hover:bg-peach-600 text-white"
+                          onClick={() => setDeployDialog({ skillId: skill.id, skillName: skill.name })}
+                          disabled={deploying === skill.id}>
+                          <Download className="h-3 w-3 mr-1" /> {deploying === skill.id ? '部署中...' : '部署到项目'}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              )
+            })}
+          </div>
 
-      {filtered.length === 0 && (
-        <div className="text-center py-16">
-          <div className="text-5xl mb-4">🔍</div>
-          <h2 className="text-lg font-display font-bold text-cream-700 mb-2">没有找到匹配的 Skill</h2>
-          <p className="text-cream-500">试试其他关键词或来源筛选</p>
-        </div>
-      )}
+          {filtered.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-5xl mb-4">🔍</div>
+              <h2 className="text-lg font-display font-bold text-cream-700 mb-2">没有找到匹配的 Skill</h2>
+              <p className="text-cream-500">试试其他关键词或来源筛选</p>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
 
       {/* 部署对话框 */}
       <Dialog open={!!deployDialog} onOpenChange={() => setDeployDialog(null)}>
@@ -225,7 +268,7 @@ export default function SkillsStore() {
             <Button
               className="bg-peach-500 hover:bg-peach-600 text-white"
               disabled={!selectedProject || deploying === deployDialog?.skillId}
-              onClick={handleDeployConfirm}
+              onClick={() => handleDeployConfirm()}
             >
               {deploying ? '部署中...' : '确认部署'}
             </Button>

@@ -19,8 +19,8 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn, sourceLabels } from '@/lib/utils'
 import { toast } from 'sonner'
-import { skillsApi } from '@/lib/tauri-api'
-import type { SkillUpdateInfoRow } from '@/lib/tauri-api'
+import { skillsApi, skillsShApi } from '@/lib/tauri-api'
+import type { SkillUpdateInfoRow, RemoteUpdateInfo } from '@/lib/tauri-api'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { useSyncStore } from '@/stores/useSyncStore'
 
@@ -38,6 +38,8 @@ export default function UpdateManager() {
   const [modifiedAlert, setModifiedAlert] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [lastCheckTime, setLastCheckTime] = useState<string | null>(null)
+  const [remoteUpdates, setRemoteUpdates] = useState<RemoteUpdateInfo[]>([])
+  const [checkingRemote, setCheckingRemote] = useState(false)
   const syncHistory = useSyncStore((s) => s.syncHistory)
 
   const handleCheck = async () => {
@@ -125,9 +127,34 @@ export default function UpdateManager() {
           <h1 className="text-3xl font-display font-bold text-cream-800">更新管理</h1>
           <p className="text-sm text-cream-500 mt-1">上次检查：{lastCheckTime ?? '未检查'}</p>
         </div>
-        <Button onClick={handleCheck} disabled={checking} className="bg-peach-500 hover:bg-peach-600 text-white rounded-xl">
-          <RefreshCw className={cn('h-4 w-4 mr-1', checking && 'animate-spin')} /> {checking ? '检查中...' : '检查 Skill 状态'}
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={handleCheck} disabled={checking} className="bg-peach-500 hover:bg-peach-600 text-white rounded-xl">
+            <RefreshCw className={cn('h-4 w-4 mr-1', checking && 'animate-spin')} /> {checking ? '检查中...' : '检查本地状态'}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={async () => {
+              setCheckingRemote(true)
+              try {
+                console.log('[UpdateManager] 检查远程更新...')
+                const infos = await skillsShApi.checkRemoteUpdates()
+                const withUpdates = infos.filter((i) => i.has_update)
+                setRemoteUpdates(withUpdates)
+                toast.success(`远程检查完成: ${withUpdates.length} 个 Skill 有更新`)
+              } catch (e) {
+                console.error('[UpdateManager] 远程检查失败:', e)
+                toast.error('远程检查失败: ' + String(e))
+              } finally {
+                setCheckingRemote(false)
+              }
+            }}
+            disabled={checkingRemote}
+            className="rounded-xl"
+          >
+            <RefreshCw className={cn('h-4 w-4 mr-1', checkingRemote && 'animate-spin')} />
+            {checkingRemote ? '检查中...' : '检查远程更新'}
+          </Button>
+        </div>
       </div>
 
       {/* 批量更新进度 */}
@@ -218,6 +245,35 @@ export default function UpdateManager() {
           <h2 className="text-xl font-display font-bold text-cream-700 mb-2">所有 Skill 都是最新版本～</h2>
           <p className="text-cream-500">上次检查：刚刚</p>
         </motion.div>
+      )}
+
+      {/* 远程更新列表 */}
+      {remoteUpdates.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-display font-bold text-cream-800">远程可更新 (skills.sh)</h2>
+          {remoteUpdates.map((item) => (
+            <Card key={item.skill_id} className="border border-lavender-200 shadow-card">
+              <CardContent className="flex items-center gap-4 p-5">
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold text-cream-800">{item.skill_name}</h3>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs text-cream-500">{item.current_version ?? '未知版本'}</span>
+                    <ArrowRight className="h-3 w-3 text-lavender-300" />
+                    <span className="text-xs font-bold text-lavender-500">有新版本</span>
+                  </div>
+                  <p className="text-xs text-cream-400 mt-1">{item.owner_repo} / {item.skill_path}</p>
+                </div>
+                <Badge variant="outline" className="bg-lavender-100 text-lavender-400 text-xs">skills.sh</Badge>
+                {item.locally_modified && (
+                  <Badge variant="outline" className="bg-honey-100 text-honey-500 text-xs">
+                    <AlertTriangle className="h-3 w-3 mr-1" /> 本地已修改
+                  </Badge>
+                )}
+                <span className="text-xs text-cream-400"><Package className="h-3 w-3 inline mr-1" />{item.deploy_count} 个部署</span>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       )}
 
       {/* 操作历史 */}

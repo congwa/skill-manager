@@ -21,6 +21,7 @@ import { useSyncStore } from '@/stores/useSyncStore'
 import { cn, relativeTime, toolNames } from '@/lib/utils'
 import { toast } from 'sonner'
 import { deploymentsApi, settingsApi, gitApi } from '@/lib/tauri-api'
+import { Upload } from 'lucide-react'
 import type { ConsistencyDetailData } from '@/lib/tauri-api'
 import { useSkillStore } from '@/stores/useSkillStore'
 
@@ -99,6 +100,26 @@ export default function SyncCenter() {
     } catch (e) {
       console.error('[SyncCenter] 同步失败:', e)
       toast.error('同步失败')
+    } finally {
+      setSyncingId(null)
+    }
+  }
+
+  const handleUpdateLibrary = async (deploymentId: string) => {
+    setSyncingId(deploymentId)
+    try {
+      console.log(`[SyncCenter] 回写到库: ${deploymentId}`)
+      const result = await deploymentsApi.updateLibraryFromDeployment(deploymentId, true)
+      console.log(`[SyncCenter] 回写完成: ${result.skill_name}, 其他 ${result.other_deployments_synced} 个部署已同步`)
+      await useSkillStore.getState().fetchSkills()
+      await useSkillStore.getState().fetchDeployments()
+      setConsistencyDetails((prev) =>
+        prev.map((d) => d.deployment_id === deploymentId ? { ...d, status: 'synced' } : d)
+      )
+      toast.success(`${result.skill_name} 已回写到本地库，${result.other_deployments_synced} 个其他部署已同步`)
+    } catch (e) {
+      console.error('[SyncCenter] 回写失败:', e)
+      toast.error('回写失败: ' + String(e))
     } finally {
       setSyncingId(null)
     }
@@ -276,14 +297,23 @@ export default function SyncCenter() {
                           </div>
                           <div className="flex gap-2">
                             {detail.status !== 'missing' && (
-                              <Button
-                                variant="ghost" size="sm" className="text-xs h-7"
-                                disabled={syncingId === detail.deployment_id}
-                                onClick={() => handleResyncDeployment(detail.deployment_id)}
-                              >
-                                <RefreshCw className={cn('h-3 w-3 mr-1', syncingId === detail.deployment_id && 'animate-spin')} />
-                                {syncingId === detail.deployment_id ? '同步中...' : '重新同步'}
-                              </Button>
+                              <>
+                                <Button
+                                  variant="ghost" size="sm" className="text-xs h-7"
+                                  disabled={syncingId === detail.deployment_id}
+                                  onClick={() => handleResyncDeployment(detail.deployment_id)}
+                                >
+                                  <RefreshCw className={cn('h-3 w-3 mr-1', syncingId === detail.deployment_id && 'animate-spin')} />
+                                  {syncingId === detail.deployment_id ? '处理中...' : '用库覆盖'}
+                                </Button>
+                                <Button
+                                  variant="ghost" size="sm" className="text-xs h-7 text-lavender-500 hover:text-lavender-600"
+                                  disabled={syncingId === detail.deployment_id}
+                                  onClick={() => handleUpdateLibrary(detail.deployment_id)}
+                                >
+                                  <Upload className="h-3 w-3 mr-1" /> 回写到库
+                                </Button>
+                              </>
                             )}
                             <Button
                               variant="ghost" size="sm" className="text-xs h-7 text-strawberry-500 hover:text-strawberry-600"

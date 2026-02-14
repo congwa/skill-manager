@@ -147,7 +147,7 @@ pub async fn get_skill_source(
     let conn = pool.get()?;
     let source = conn.query_row(
         "SELECT id, skill_id, source_type, url, installed_version,
-                original_checksum, created_at, updated_at
+                original_checksum, remote_sha, skill_path, created_at, updated_at
          FROM skill_sources WHERE skill_id = ?1",
         params![skill_id],
         |row| Ok(SkillSource {
@@ -157,8 +157,10 @@ pub async fn get_skill_source(
             url: row.get(3)?,
             installed_version: row.get(4)?,
             original_checksum: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
+            remote_sha: row.get(6)?,
+            skill_path: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
         }),
     ).optional()?;
 
@@ -412,5 +414,158 @@ pub async fn update_skill_from_library(
         backup_id,
         deployments_synced,
         new_checksum,
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct RestoreResult {
+    pub skill_id: String,
+    pub restored_version: Option<String>,
+    pub new_checksum: Option<String>,
+    pub deployments_synced: usize,
+}
+
+#[tauri::command]
+pub async fn restore_from_backup(
+    backup_id: String,
+    sync_deployments: bool,
+    pool: State<'_, DbPool>,
+) -> Result<RestoreResult, AppError> {
+    info!("[restore_from_backup] backup_id={}, sync={}", backup_id, sync_deployments);
+
+    // 1. 查询备份记录
+    let (skill_id, version_label, backup_path, _backup_checksum) = {
+        let conn = pool.get()?;
+        conn.query_row(
+            "SELECT skill_id, version_label, backup_path, checksum
+             FROM skill_backups WHERE id = ?1",
+            params![backup_id],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            )),
+        ).map_err(|_| AppError::NotFound(format!("备份记录不存在: {}", backup_id)))?
+    };
+
+    let backup_dir = Path::new(&backup_path);
+    if !backup_dir.exists() || !backup_dir.is_dir() {
+        return Err(AppError::Validation(format!("备份目录不存在: {}", backup_path)));
+    }
+
+    // 2. 获取 Skill 当前信息
+    let (skill_name, local_path, old_checksum) = {
+        let conn = pool.get()?;
+        conn.query_row(
+            "SELECT name, local_path, checksum FROM skills WHERE id = ?1",
+            params![skill_id],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            )),
+        ).map_err(|_| AppError::NotFound(format!("Skill 不存在: {}", skill_id)))?
+    };
+
+    let lib_dir = Path::new(&local_path);
+
+    // 3. 备份当前版本（回滚前先备份，防止误操作）
+    {
+        let conn = pool.get()?;
+        let backup_base = dirs::home_dir()
+            .unwrap_or_default()
+            .join(".skills-manager")
+            .join("backups")
+            .join(&skill_name);
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+        let current_backup_path = backup_base.join(&timestamp);
+
+        if lib_dir.exists() {
+            let _ = copy_dir_recursive(lib_dir, &current_backup_path);
+            let bid = Uuid::new_v4().to_string();
+            let bp_str = current_backup_path.to_string_lossy().to_string();
+            conn.execute(
+                "INSERT INTO skill_backups (id, skill_id, version_label, backup_path, checksum, reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'before_restore')",
+                params![bid, skill_id, timestamp, bp_str, old_checksum],
+            )?;
+            info!("[restore_from_backup] 回滚前备份当前版本: {}", bp_str);
+        }
+    }
+
+    // 4. 用备份覆盖本地 Skill 库
+    if lib_dir.exists() {
+        std::fs::remove_dir_all(lib_dir)?;
+    }
+    let files_copied = copy_dir_recursive(backup_dir, lib_dir)?;
+    let new_checksum = compute_dir_checksum(lib_dir);
+
+    info!("[restore_from_backup] 恢复完成: {} 个文件, checksum={:?}", files_copied, new_checksum);
+
+    // 5. 更新数据库
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "UPDATE skills SET checksum = ?1, last_modified = datetime('now'), updated_at = datetime('now')
+             WHERE id = ?2",
+            params![new_checksum, skill_id],
+        )?;
+        conn.execute(
+            "UPDATE skill_sources SET original_checksum = ?1, updated_at = datetime('now')
+             WHERE skill_id = ?2",
+            params![new_checksum, skill_id],
+        )?;
+    }
+
+    // 6. 可选：同步到所有部署
+    let mut deployments_synced = 0usize;
+    if sync_deployments {
+        let deploy_rows: Vec<(String, String)> = {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare(
+                "SELECT id, path FROM skill_deployments WHERE skill_id = ?1"
+            )?;
+            let result = stmt.query_map(params![skill_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?.collect::<Result<Vec<_>, _>>()?;
+            result
+        };
+
+        for (dep_id, deploy_path) in &deploy_rows {
+            let dst = Path::new(deploy_path);
+            if dst.exists() {
+                let _ = std::fs::remove_dir_all(dst);
+            }
+            let _ = copy_dir_recursive(lib_dir, dst);
+            let dep_checksum = compute_dir_checksum(dst);
+
+            let conn = pool.get()?;
+            conn.execute(
+                "UPDATE skill_deployments SET checksum = ?1, status = 'synced',
+                        last_synced = datetime('now'), updated_at = datetime('now')
+                 WHERE id = ?2",
+                params![dep_checksum, dep_id],
+            )?;
+            deployments_synced += 1;
+        }
+        info!("[restore_from_backup] 已同步 {} 个部署", deployments_synced);
+    }
+
+    // 7. 写入同步历史
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "INSERT INTO sync_history (id, skill_id, action, status, created_at)
+             VALUES (?1, ?2, 'restore', 'success', datetime('now'))",
+            params![Uuid::new_v4().to_string(), skill_id],
+        )?;
+    }
+
+    Ok(RestoreResult {
+        skill_id,
+        restored_version: version_label,
+        new_checksum,
+        deployments_synced,
     })
 }

@@ -77,7 +77,8 @@ export default function GitImport() {
       const result = await gitApi.importFromRepo(
         clonePath,
         selected.map((s) => s.name),
-        hasConflicts
+        hasConflicts,
+        url
       )
       setDeployProgress(100)
       setImportResult({ imported: result.skills_imported, updated: result.skills_updated, skipped: result.skills_skipped })

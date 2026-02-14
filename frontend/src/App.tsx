@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { listen } from '@tauri-apps/api/event'
 import { AppLayout } from '@/components/layout/AppLayout'
 import Onboarding from '@/pages/Onboarding'
 import ProjectList from '@/pages/ProjectList'
@@ -18,6 +19,7 @@ import { useSkillStore } from '@/stores/useSkillStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useSyncStore } from '@/stores/useSyncStore'
 import { settingsApi, scannerApi, deploymentsApi } from '@/lib/tauri-api'
+import { toast } from 'sonner'
 
 function App() {
   const onboardingCompleted = useUIStore((s) => s.onboardingCompleted)
@@ -97,6 +99,25 @@ function App() {
     }
     bootstrap()
   }, [])
+
+  // 监听后端 skill-change 事件，自动刷新数据
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    listen<{ event_id: string; event_type: string; path: string; deployment_id: string }>(
+      'skill-change',
+      (event) => {
+        console.log('[App] 收到 skill-change 事件:', event.payload)
+        // 自动刷新变更事件和部署数据
+        fetchChangeEvents()
+        fetchDeployments()
+        toast.info(`检测到文件变更: ${event.payload.event_type}`, {
+          description: event.payload.path.split('/').slice(-3).join('/'),
+          duration: 4000,
+        })
+      }
+    ).then((fn) => { unlisten = fn })
+    return () => { unlisten?.() }
+  }, [fetchChangeEvents, fetchDeployments])
 
   if (!appReady) {
     return (
