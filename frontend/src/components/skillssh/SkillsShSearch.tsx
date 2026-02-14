@@ -83,6 +83,13 @@ export default function SkillsShSearch() {
   }
 
   const handleInstallClick = async (item: SkillsShSearchResult) => {
+    // 确定 skill 名称：优先 skill_id，回退到 name
+    const effectiveName = (item.skill_id || item.name || '').trim()
+    if (!effectiveName) {
+      toast.error('无法确定 Skill 名称，无法安装')
+      return
+    }
+
     setLoadingTree(item.id)
     try {
       // Parse owner/repo from source field
@@ -94,16 +101,20 @@ export default function SkillsShSearch() {
       const skillEntry = tree.skills.find((s) => {
         const parts = s.skill_path.split('/')
         const entryName = parts[parts.length - 1]
-        return entryName === item.skill_id || s.skill_path.endsWith(item.skill_id)
+        return entryName === effectiveName || s.skill_path.endsWith(effectiveName)
+          || entryName === item.name || s.skill_path.endsWith(item.name)
       })
 
       if (!skillEntry) {
-        toast.error(`在仓库 ${ownerRepo} 中未找到 Skill: ${item.skill_id}`)
+        toast.error(`在仓库 ${ownerRepo} 中未找到 Skill: ${effectiveName}`)
         return
       }
 
+      // 从 skillEntry.skill_path 提取最终名称
+      const finalName = skillEntry.skill_path.split('/').pop() || effectiveName
+
       setWizardOwnerRepo(ownerRepo)
-      setWizardSkillName(item.skill_id)
+      setWizardSkillName(finalName)
       setWizardSkillEntry(skillEntry)
       setWizardInstalls(item.installs)
       setWizardOpen(true)

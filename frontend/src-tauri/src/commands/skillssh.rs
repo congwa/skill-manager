@@ -262,6 +262,11 @@ pub async fn install_from_skills_sh(
 
     let force = force_overwrite.unwrap_or(false);
 
+    // Safety: skill_name 不能为空，否则会删除整个 skills 目录
+    if skill_name.trim().is_empty() {
+        return Err(AppError::Validation("skill_name 不能为空".into()));
+    }
+
     // Step 1: Check for conflicts
     {
         let conn = pool.get()?;
@@ -714,6 +719,11 @@ async fn deploy_skill_internal(
         };
         global_dir.join(skill_name)
     };
+
+    // Safety: 防止 skill_name 为空时删除整个 skills 父目录
+    if skill_name.trim().is_empty() {
+        return Err(AppError::Validation("skill_name 不能为空，拒绝部署".into()));
+    }
 
     // Copy files
     if deploy_path.exists() {
