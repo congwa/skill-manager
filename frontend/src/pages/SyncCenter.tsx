@@ -313,15 +313,15 @@ export default function SyncCenter() {
                 一致性检查说明
               </div>
               <p className="text-cream-600 text-xs leading-relaxed">
-                对账会检测<strong>数据库记录</strong>与<strong>磁盘实际文件</strong>之间的一致性，分为两个阶段：
+                检测<strong>部署目录磁盘文件</strong>与<strong>数据库记录的 checksum</strong>是否一致，分为两个阶段：
               </p>
               <div className="space-y-1.5 text-xs text-cream-600">
                 <div className="rounded-md bg-cream-50 p-2">
                   <p className="font-medium text-cream-700 mb-1">阶段 1：部署记录校验</p>
-                  <p>对比每条部署记录的两个位置的 checksum：</p>
+                  <p>对比每条部署记录的：</p>
                   <ul className="list-disc ml-4 mt-1 space-y-0.5">
-                    <li><strong>部署目录</strong>（deploy_path）— 如 <code className="text-[10px] bg-cream-100 px-1 rounded">~/.codeium/windsurf/skills/xxx</code></li>
-                    <li><strong>Skill 库目录</strong>（local_path）— 如 <code className="text-[10px] bg-cream-100 px-1 rounded">~/.skills-manager/skills/xxx</code></li>
+                    <li><strong>磁盘当前 checksum</strong> — 重新计算部署目录（如 <code className="text-[10px] bg-cream-100 px-1 rounded">~/.codeium/windsurf/skills/xxx</code>）的文件哈希</li>
+                    <li><strong>数据库记录的 checksum</strong> — 上次部署/同步时保存的哈希值</li>
                   </ul>
                   <p className="mt-1">结果：<Badge variant="outline" className="text-[9px] px-1 py-0 bg-mint-50 text-mint-500">synced</Badge> 一致 · <Badge variant="outline" className="text-[9px] px-1 py-0 bg-honey-50 text-honey-500">diverged</Badge> 偏离 · <Badge variant="outline" className="text-[9px] px-1 py-0 bg-strawberry-50 text-strawberry-500">missing</Badge> 缺失</p>
                 </div>

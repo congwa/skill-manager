@@ -682,11 +682,8 @@ pub async fn reconcile_all_deployments(
     let mut events_to_create: Vec<(String, String, String, Option<String>, Option<String>)> = Vec::new();
     let mut status_updates: Vec<(String, String)> = Vec::new();
 
-    for (dep_id, skill_id, _tool, deploy_path, local_path, old_checksum) in &deploy_rows {
+    for (dep_id, skill_id, _tool, deploy_path, _local_path, db_checksum) in &deploy_rows {
         let deploy_dir = Path::new(deploy_path);
-        let lib_dir = Path::new(local_path);
-
-        let lib_checksum = compute_dir_checksum(lib_dir);
 
         if !deploy_dir.exists() {
             missing_detected += 1;
@@ -695,23 +692,23 @@ pub async fn reconcile_all_deployments(
                 dep_id.clone(),
                 "deleted".to_string(),
                 skill_id.clone(),
-                old_checksum.clone(),
+                db_checksum.clone(),
                 None,
             ));
             info!("[reconcile] 部署缺失: {} (路径: {})", dep_id, deploy_path);
         } else {
-            let deploy_checksum = compute_dir_checksum(deploy_dir);
-            if lib_checksum != deploy_checksum {
+            let current_checksum = compute_dir_checksum(deploy_dir);
+            if db_checksum != &current_checksum {
                 diverged_detected += 1;
                 status_updates.push((dep_id.clone(), "diverged".to_string()));
                 events_to_create.push((
                     dep_id.clone(),
                     "modified".to_string(),
                     skill_id.clone(),
-                    lib_checksum.clone(),
-                    deploy_checksum.clone(),
+                    db_checksum.clone(),
+                    current_checksum.clone(),
                 ));
-                info!("[reconcile] 部署偏离: {} (lib={:?}, deploy={:?})", dep_id, lib_checksum, deploy_checksum);
+                info!("[reconcile] 部署偏离: {} (db={:?}, disk={:?})", dep_id, db_checksum, current_checksum);
             } else {
                 status_updates.push((dep_id.clone(), "synced".to_string()));
             }
