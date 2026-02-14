@@ -21,7 +21,8 @@ import { useSyncStore } from '@/stores/useSyncStore'
 import { cn, relativeTime, toolNames } from '@/lib/utils'
 import { toast } from 'sonner'
 import { deploymentsApi, settingsApi, gitApi, skillsApi } from '@/lib/tauri-api'
-import { Upload, Eye, GitMerge, FolderSearch, Download, Loader2 } from 'lucide-react'
+import { Upload, Eye, GitMerge, FolderSearch, Download, Loader2, Info } from 'lucide-react'
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import type { ConsistencyDetailData, SkillDiffResult, MergeResultData, GitRepoUpdateInfo, ScanRemoteResultData } from '@/lib/tauri-api'
 import { useSkillStore } from '@/stores/useSkillStore'
 import DiffViewer from '@/components/DiffViewer'
@@ -299,9 +300,39 @@ export default function SyncCenter() {
 
       {/* 操作按钮 */}
       <div className="flex gap-3">
-        <Button onClick={handleConsistencyCheck} disabled={checking} className="bg-peach-500 hover:bg-peach-600 text-white rounded-xl">
-          <ShieldCheck className="h-4 w-4 mr-1" /> {checking ? '检查中...' : '执行一致性检查'}
-        </Button>
+        <HoverCard openDelay={200}>
+          <HoverCardTrigger asChild>
+            <Button onClick={handleConsistencyCheck} disabled={checking} className="bg-peach-500 hover:bg-peach-600 text-white rounded-xl">
+              <ShieldCheck className="h-4 w-4 mr-1" /> {checking ? '检查中...' : '执行一致性检查'}
+            </Button>
+          </HoverCardTrigger>
+          <HoverCardContent className="w-96 text-sm" side="bottom" align="start">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 font-semibold text-cream-800">
+                <Info className="h-4 w-4 text-peach-500" />
+                一致性检查说明
+              </div>
+              <p className="text-cream-600 text-xs leading-relaxed">
+                对账会检测<strong>数据库记录</strong>与<strong>磁盘实际文件</strong>之间的一致性，分为两个阶段：
+              </p>
+              <div className="space-y-1.5 text-xs text-cream-600">
+                <div className="rounded-md bg-cream-50 p-2">
+                  <p className="font-medium text-cream-700 mb-1">阶段 1：部署记录校验</p>
+                  <p>对比每条部署记录的两个位置的 checksum：</p>
+                  <ul className="list-disc ml-4 mt-1 space-y-0.5">
+                    <li><strong>部署目录</strong>（deploy_path）— 如 <code className="text-[10px] bg-cream-100 px-1 rounded">~/.codeium/windsurf/skills/xxx</code></li>
+                    <li><strong>Skill 库目录</strong>（local_path）— 如 <code className="text-[10px] bg-cream-100 px-1 rounded">~/.skills-manager/skills/xxx</code></li>
+                  </ul>
+                  <p className="mt-1">结果：<Badge variant="outline" className="text-[9px] px-1 py-0 bg-mint-50 text-mint-500">synced</Badge> 一致 · <Badge variant="outline" className="text-[9px] px-1 py-0 bg-honey-50 text-honey-500">diverged</Badge> 偏离 · <Badge variant="outline" className="text-[9px] px-1 py-0 bg-strawberry-50 text-strawberry-500">missing</Badge> 缺失</p>
+                </div>
+                <div className="rounded-md bg-cream-50 p-2">
+                  <p className="font-medium text-cream-700 mb-1">阶段 2：未跟踪检测</p>
+                  <p>扫描所有项目的工具目录（如 <code className="text-[10px] bg-cream-100 px-1 rounded">.windsurf/skills/</code>），发现不在数据库中的 Skill 文件夹。</p>
+                </div>
+              </div>
+            </div>
+          </HoverCardContent>
+        </HoverCard>
         <Button variant="outline" onClick={() => setExportOpen(true)} className="rounded-xl">
           <CloudUpload className="h-4 w-4 mr-1" /> 备份导出到 Git
         </Button>
