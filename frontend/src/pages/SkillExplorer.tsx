@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Search, FolderTree, ChevronsUpDown } from 'lucide-react'
+import { Search, ChevronsUpDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -40,6 +40,7 @@ export default function SkillExplorer() {
   const [activeFileId, setActiveFileId] = useState<string | null>(null)
   const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 })
   const [expandAll, setExpandAll] = useState(false)
+  const [expandKey, setExpandKey] = useState(0)
   const [closeConfirm, setCloseConfirm] = useState<string | null>(null)
 
   // 加载所有 Skill 的文件列表
@@ -251,45 +252,49 @@ export default function SkillExplorer() {
     )
   }
 
+  const handleToggleExpand = useCallback(() => {
+    setExpandAll((prev) => !prev)
+    setExpandKey((k) => k + 1)
+  }, [])
+
   return (
     <div className="flex flex-col h-[calc(100vh-120px)]">
-      {/* 顶部操作栏 */}
-      <div className="flex items-center gap-3 mb-3 shrink-0">
-        <FolderTree className="h-5 w-5 text-peach-500" />
-        <h1 className="text-lg font-display font-bold text-cream-800">Skill Explorer</h1>
-        <div className="relative flex-1 max-w-xs ml-auto">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-cream-400" />
-          <Input
-            placeholder="搜索 Skill..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 rounded-full border-cream-300 h-8 text-sm"
-          />
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-xs h-8"
-          onClick={() => setExpandAll(!expandAll)}
-        >
-          <ChevronsUpDown className="h-3.5 w-3.5 mr-1" />
-          {expandAll ? '全部折叠' : '全部展开'}
-        </Button>
-      </div>
-
       {/* 主区域 */}
       <div className="flex flex-1 gap-0 rounded-xl overflow-hidden border border-cream-200" style={{ boxShadow: 'var(--shadow-card)' }}>
         {/* 左侧面板 */}
         <div className="w-[280px] shrink-0 flex flex-col bg-cream-50/80 border-r border-cream-200">
+          {/* 工具栏：搜索 + 折叠 */}
+          <div className="flex items-center gap-1.5 px-2 py-2 border-b border-cream-200 shrink-0">
+            <div className="relative flex-1">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-cream-400" />
+              <Input
+                placeholder="搜索 Skill..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-7 h-7 text-xs rounded border-cream-300"
+              />
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 text-cream-500 hover:text-cream-700"
+              onClick={handleToggleExpand}
+              title={expandAll ? '全部折叠' : '全部展开'}
+            >
+              <ChevronsUpDown className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+
           {/* 文件树 */}
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 overflow-auto">
             {treeElements.length === 0 ? (
               <div className="p-4 text-center text-xs text-cream-400">
                 {searchQuery ? '没有匹配的 Skill' : '暂无 Skill'}
               </div>
             ) : (
               <Tree
-                className="p-2 h-full"
+                key={expandKey}
+                className="p-2"
                 initialExpandedItems={expandAll ? treeElements.map((e) => e.id) : []}
               >
                 {treeElements.map((skillNode) => (

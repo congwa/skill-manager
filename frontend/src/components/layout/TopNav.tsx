@@ -1,6 +1,5 @@
-import { useLocation } from 'react-router-dom'
-import { Search, Bell } from 'lucide-react'
-import { Input } from '@/components/ui/input'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { Bell } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Breadcrumb, BreadcrumbItem, BreadcrumbLink,
@@ -22,6 +21,7 @@ const pathMap: Record<string, string> = {
 
 export function TopNav() {
   const location = useLocation()
+  const navigate = useNavigate()
   const pendingCount = useSyncStore((s) => s.changeEvents.filter((e) => e.status === 'pending').length)
 
   const segments = location.pathname.split('/').filter(Boolean)
@@ -48,15 +48,13 @@ export function TopNav() {
       </Breadcrumb>
 
       <div className="ml-auto flex items-center gap-3">
-        <div className="relative w-56">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-cream-400" />
-          <Input
-            placeholder="搜索..."
-            className="pl-9 h-9 rounded-full border-cream-300 bg-cream-50 text-sm focus:border-peach-300 focus:ring-peach-200"
-          />
-        </div>
-
-        <Button variant="ghost" size="icon" className="relative text-cream-500 hover:text-cream-700">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative text-cream-500 hover:text-cream-700"
+          onClick={() => navigate('/sync')}
+          title="同步中心"
+        >
           <Bell className="h-5 w-5" />
           {pendingCount > 0 && (
             <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-strawberry-500 text-[10px] text-white font-bold">
