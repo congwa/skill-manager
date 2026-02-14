@@ -8,6 +8,7 @@ import ProjectDetail from '@/pages/ProjectDetail'
 import SkillList from '@/pages/SkillList'
 import SkillDetail from '@/pages/SkillDetail'
 import SkillEditor from '@/pages/SkillEditor'
+import SkillExplorer from '@/pages/SkillExplorer'
 import SkillsStore from '@/pages/SkillsStore'
 import GitImport from '@/pages/GitImport'
 import SyncCenter from '@/pages/SyncCenter'
@@ -140,6 +141,7 @@ function App() {
           <Route path="/skills" element={<SkillList />} />
           <Route path="/skills/:skillId" element={<SkillDetail />} />
           <Route path="/skills/:skillId/edit" element={<SkillEditor />} />
+          <Route path="/explorer" element={<SkillExplorer />} />
           <Route path="/store" element={<SkillsStore />} />
           <Route path="/import" element={<GitImport />} />
           <Route path="/sync" element={<SyncCenter />} />

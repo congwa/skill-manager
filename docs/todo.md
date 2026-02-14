@@ -68,7 +68,7 @@
 | ~~19~~ | ~~3.1.1~~ | ~~批量导入多个项目~~ ✅ 已实现 | 后端: batch_add_projects 批量添加项目路径（跳过无效/已存在，含详细 log）；前端: 文件选择对话框支持多选 |
 | ~~20~~ | ~~3.1.1~~ | ~~拖拽项目目录快速导入~~ ✅ 已实现 | 前端: ProjectList 添加项目弹窗支持拖拽区域（drag & drop）+ 拖拽视觉反馈 |
 | ~~23~~ | ~~3.5.7 场景六~~ | ~~SKILL.md 相同但支撑文件不同时的逐文件 Diff~~ ✅ 已实现 | 前端: DiffViewer 智能检测 SKILL.md 状态，无变化时显示"仅支撑文件差异"蓝色提示，已修改时显示"核心行为可能改变"黄色警告 |
-| 24 | Phase 4 | Skill 编辑器（内置 Markdown 编辑 + 预览） |
+| ~~24~~ | ~~Phase 4~~ | ~~Skill 编辑器（内置 Markdown 编辑 + 预览）~~ ✅ 已实现 | Skill Explorer 页面：左侧 Magic UI File Tree + Skill 详情面板，右侧 CodeMirror 6 编辑器（语法高亮、行号、折叠、Cmd+S）+ 多文件 Tab 标签栏 + 底部状态栏 |
 | 25 | Phase 4 | Skill 创建向导 |
 | 26 | Phase 4 | CLI 命令行工具 |
 | 27 | Phase 4 | VS Code / JetBrains 插件集成 |

@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
-  FolderOpen, Sparkles, Store, GitBranch, RefreshCw,
+  FolderOpen, Sparkles, Code2, Store, GitBranch, RefreshCw,
   Download, Settings, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import {
@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 const menuItems = [
   { label: '项目', icon: FolderOpen, path: '/projects' },
   { label: 'Skills', icon: Sparkles, path: '/skills' },
+  { label: 'Explorer', icon: Code2, path: '/explorer' },
   { label: '仓库', icon: Store, path: '/store' },
   { label: 'Git 导入', icon: GitBranch, path: '/import' },
   { label: '同步中心', icon: RefreshCw, path: '/sync' },

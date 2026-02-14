@@ -12,6 +12,7 @@ import { useSyncStore } from '@/stores/useSyncStore'
 const pathMap: Record<string, string> = {
   '/projects': '项目',
   '/skills': 'Skills',
+  '/explorer': 'Explorer',
   '/store': '仓库',
   '/import': 'Git 导入',
   '/sync': '同步中心',
