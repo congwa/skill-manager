@@ -693,7 +693,7 @@ pub async fn reconcile_all_deployments(
             status_updates.push((dep_id.clone(), "missing".to_string()));
             events_to_create.push((
                 dep_id.clone(),
-                "file_deleted".to_string(),
+                "deleted".to_string(),
                 skill_id.clone(),
                 old_checksum.clone(),
                 None,
@@ -706,7 +706,7 @@ pub async fn reconcile_all_deployments(
                 status_updates.push((dep_id.clone(), "diverged".to_string()));
                 events_to_create.push((
                     dep_id.clone(),
-                    "checksum_mismatch".to_string(),
+                    "modified".to_string(),
                     skill_id.clone(),
                     lib_checksum.clone(),
                     deploy_checksum.clone(),
@@ -750,7 +750,7 @@ pub async fn reconcile_all_deployments(
                             info!("[reconcile] 未跟踪 Skill: {} (项目: {}, 工具: {})", skill_name, project_id, tool);
                             events_to_create.push((
                                 String::new(),
-                                "untracked_skill".to_string(),
+                                "created".to_string(),
                                 format!("{}:{}:{}", project_id, tool, skill_name),
                                 None,
                                 compute_dir_checksum(&path),

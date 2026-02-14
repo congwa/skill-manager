@@ -34,6 +34,7 @@ export default function SkillExplorer() {
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [skillFilesMap, setSkillFilesMap] = useState<Map<string, string[]>>(new Map())
+  const [skillPathMap, setSkillPathMap] = useState<Map<string, string>>(new Map())
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null)
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([])
   const [activeFileId, setActiveFileId] = useState<string | null>(null)
@@ -46,14 +47,29 @@ export default function SkillExplorer() {
     const loadFiles = async () => {
       setLoading(true)
       const map = new Map<string, string[]>()
+      const pathMap = new Map<string, string>() // skillId -> 实际使用的根路径
       const promises = skills
         .filter((s) => s.local_path)
         .map(async (skill) => {
+          let basePath = skill.local_path!
           try {
-            const relFiles = await skillsApi.listFiles(skill.local_path!)
-            const absFiles = relFiles.map((f) => `${skill.local_path}/${f}`)
-            console.log(`[SkillExplorer] ${skill.name}: ${relFiles.length} files`, relFiles.slice(0, 5))
+            // 优先尝试 local_path（skill 库目录）
+            let relFiles = await skillsApi.listFiles(basePath)
+
+            // 如果 local_path 为空，回退到部署路径
+            if (relFiles.length === 0) {
+              const dep = deployments.find((d) => d.skill_id === skill.id && d.deploy_path)
+              if (dep?.deploy_path) {
+                basePath = dep.deploy_path
+                relFiles = await skillsApi.listFiles(basePath)
+                console.log(`[SkillExplorer] ${skill.name}: fallback to deploy_path=${basePath}, ${relFiles.length} files`)
+              }
+            }
+
+            const absFiles = relFiles.map((f) => `${basePath}/${f}`)
+            console.log(`[SkillExplorer] ${skill.name}: ${relFiles.length} files from ${basePath}`)
             map.set(skill.id, absFiles)
+            pathMap.set(skill.id, basePath)
           } catch (err) {
             console.warn(`[SkillExplorer] Failed to list files for ${skill.name}:`, err)
             map.set(skill.id, [])
@@ -61,11 +77,12 @@ export default function SkillExplorer() {
         })
       await Promise.all(promises)
       setSkillFilesMap(map)
+      setSkillPathMap(pathMap)
       setLoading(false)
     }
     if (skills.length > 0) loadFiles()
     else setLoading(false)
-  }, [skills])
+  }, [skills, deployments])
 
   // 过滤 Skills
   const filteredSkills = skills.filter((s) =>
@@ -77,6 +94,7 @@ export default function SkillExplorer() {
     .filter((s) => s.local_path)
     .map((skill) => {
       const files = skillFilesMap.get(skill.id) || []
+      const actualBasePath = skillPathMap.get(skill.id) || skill.local_path!
       if (files.length === 0) console.log(`[SkillExplorer] ${skill.name}: no files in map`)
       // 构建文件/子目录结构
       const buildTree = (fileList: string[], basePath: string): TreeViewElement[] => {
@@ -121,7 +139,7 @@ export default function SkillExplorer() {
       return {
         id: `skill-${skill.id}`,
         name: skill.name,
-        children: buildTree(files, skill.local_path!),
+        children: buildTree(files, actualBasePath),
       }
     })
 
