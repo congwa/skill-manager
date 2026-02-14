@@ -792,3 +792,141 @@ mod urlencoding {
 }
 
 use rusqlite::OptionalExtension;
+
+// ── 6. 排行榜 / 分类浏览 ──
+
+#[derive(serde::Serialize)]
+pub struct BrowseResult {
+    pub category: String,
+    pub skills: Vec<SkillsShSearchResult>,
+    pub total: usize,
+}
+
+#[tauri::command]
+pub async fn browse_popular_skills_sh(
+    category: Option<String>,
+) -> Result<BrowseResult, AppError> {
+    info!("[browse_popular_skills_sh] category={:?}", category);
+
+    // 预定义分类关键词
+    let categories: std::collections::HashMap<&str, Vec<&str>> = [
+        ("popular", vec!["skill", "best", "design", "code", "build"]),
+        ("frontend", vec!["react", "vue", "css", "tailwind", "nextjs"]),
+        ("backend", vec!["api", "database", "server", "python", "rust"]),
+        ("devops", vec!["docker", "deploy", "ci", "testing", "git"]),
+        ("ai", vec!["ai", "llm", "prompt", "agent", "machine"]),
+        ("mobile", vec!["mobile", "ios", "android", "flutter", "swift"]),
+    ].into_iter().collect();
+
+    let cat = category.as_deref().unwrap_or("popular");
+    let keywords = categories.get(cat).cloned().unwrap_or_else(|| {
+        // 如果传入的是自定义关键词而非预定义分类，直接用它搜索
+        vec![]
+    });
+
+    info!("[browse_popular_skills_sh] 使用关键词: {:?}", keywords);
+
+    let client = reqwest::Client::new();
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut all_results: Vec<SkillsShSearchResult> = Vec::new();
+
+    // 如果是自定义关键词
+    if keywords.is_empty() {
+        let query = category.as_deref().unwrap_or("skill");
+        if query.len() < 2 {
+            return Err(AppError::Validation("关键词至少需要 2 个字符".into()));
+        }
+        let url = format!(
+            "https://skills.sh/api/search?q={}&limit=50",
+            urlencoding::encode(query)
+        );
+        info!("[browse_popular_skills_sh] 请求: {}", url);
+        let resp = client
+            .get(&url)
+            .header("User-Agent", "skills-manager")
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("HTTP 请求失败: {}", e)))?;
+
+        if resp.status().is_success() {
+            let data: SkillsShApiResponse = resp.json().await
+                .map_err(|e| AppError::Internal(format!("解析响应失败: {}", e)))?;
+            for skill in data.skills.unwrap_or_default() {
+                if seen_ids.insert(skill.id.clone()) {
+                    all_results.push(skill);
+                }
+            }
+        }
+    } else {
+        // 用多个关键词搜索并聚合
+        for keyword in &keywords {
+            let url = format!(
+                "https://skills.sh/api/search?q={}&limit=30",
+                urlencoding::encode(keyword)
+            );
+            info!("[browse_popular_skills_sh] 请求: {} (keyword={})", url, keyword);
+
+            let resp = client
+                .get(&url)
+                .header("User-Agent", "skills-manager")
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    let data: SkillsShApiResponse = r.json().await
+                        .map_err(|e| AppError::Internal(format!("解析响应失败: {}", e)))?;
+                    let skills = data.skills.unwrap_or_default();
+                    info!("[browse_popular_skills_sh]   keyword='{}' 返回 {} 条", keyword, skills.len());
+                    for skill in skills {
+                        if seen_ids.insert(skill.id.clone()) {
+                            all_results.push(skill);
+                        }
+                    }
+                }
+                Ok(r) => {
+                    info!("[browse_popular_skills_sh]   keyword='{}' 返回状态 {}", keyword, r.status());
+                }
+                Err(e) => {
+                    info!("[browse_popular_skills_sh]   keyword='{}' 请求失败: {}", keyword, e);
+                }
+            }
+        }
+    }
+
+    // 按 installs 降序排列
+    all_results.sort_by(|a, b| b.installs.cmp(&a.installs));
+
+    let total = all_results.len();
+    info!(
+        "[browse_popular_skills_sh] 完成: category='{}', 去重后 {} 条结果",
+        cat, total
+    );
+
+    Ok(BrowseResult {
+        category: cat.to_string(),
+        skills: all_results,
+        total,
+    })
+}
+
+#[tauri::command]
+pub async fn get_skill_categories() -> Result<Vec<SkillCategory>, AppError> {
+    info!("[get_skill_categories] 返回预定义分类列表");
+    Ok(vec![
+        SkillCategory { id: "popular".into(), name: "热门".into(), icon: "flame".into(), keywords: vec!["skill".into(), "best".into(), "design".into()] },
+        SkillCategory { id: "frontend".into(), name: "前端".into(), icon: "layout".into(), keywords: vec!["react".into(), "vue".into(), "css".into(), "tailwind".into()] },
+        SkillCategory { id: "backend".into(), name: "后端".into(), icon: "server".into(), keywords: vec!["api".into(), "database".into(), "python".into(), "rust".into()] },
+        SkillCategory { id: "devops".into(), name: "DevOps".into(), icon: "git-branch".into(), keywords: vec!["docker".into(), "deploy".into(), "testing".into()] },
+        SkillCategory { id: "ai".into(), name: "AI / LLM".into(), icon: "brain".into(), keywords: vec!["ai".into(), "llm".into(), "prompt".into(), "agent".into()] },
+        SkillCategory { id: "mobile".into(), name: "移动端".into(), icon: "smartphone".into(), keywords: vec!["mobile".into(), "ios".into(), "android".into()] },
+    ])
+}
+
+#[derive(serde::Serialize)]
+pub struct SkillCategory {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub keywords: Vec<String>,
+}

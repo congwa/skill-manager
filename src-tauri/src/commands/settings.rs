@@ -150,23 +150,25 @@ pub async fn get_change_events(
     status_filter: Option<String>,
     pool: State<'_, DbPool>,
 ) -> Result<Vec<ChangeEvent>, AppError> {
+    info!("[get_change_events] status_filter={:?}", status_filter);
     let conn = pool.get()?;
 
+    let base_query = "SELECT ce.id, ce.deployment_id, ce.event_type, ce.old_checksum, ce.new_checksum,
+                ce.resolution, ce.resolved_at, ce.created_at,
+                s.name as skill_name, p.name as project_name, d.tool, d.path
+         FROM change_events ce
+         LEFT JOIN skill_deployments d ON d.id = ce.deployment_id
+         LEFT JOIN skills s ON s.id = d.skill_id
+         LEFT JOIN projects p ON p.id = d.project_id";
+
     let query = if let Some(ref status) = status_filter {
-        format!(
-            "SELECT id, deployment_id, event_type, old_checksum, new_checksum,
-                    resolution, resolved_at, created_at
-             FROM change_events WHERE resolution = '{}'
-             ORDER BY created_at DESC",
-            match status.as_str() {
-                "pending" | "lib_updated" | "redeployed" | "ignored" | "conflict_resolved" => status.as_str(),
-                _ => "pending",
-            }
-        )
+        let safe_status = match status.as_str() {
+            "pending" | "lib_updated" | "redeployed" | "ignored" | "conflict_resolved" => status.as_str(),
+            _ => "pending",
+        };
+        format!("{} WHERE ce.resolution = '{}' ORDER BY ce.created_at DESC", base_query, safe_status)
     } else {
-        "SELECT id, deployment_id, event_type, old_checksum, new_checksum,
-                resolution, resolved_at, created_at
-         FROM change_events ORDER BY created_at DESC".to_string()
+        format!("{} ORDER BY ce.created_at DESC", base_query)
     };
 
     let mut stmt = conn.prepare(&query)?;
@@ -181,9 +183,14 @@ pub async fn get_change_events(
             resolution: row.get(5)?,
             resolved_at: row.get(6)?,
             created_at: row.get(7)?,
+            skill_name: row.get(8)?,
+            project_name: row.get(9)?,
+            tool: row.get(10)?,
+            deploy_path: row.get(11)?,
         })
     })?.collect::<Result<Vec<_>, _>>()?;
 
+    info!("[get_change_events] 返回 {} 条变更事件", events.len());
     Ok(events)
 }
 

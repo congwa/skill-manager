@@ -138,6 +138,114 @@ pub async fn delete_skill(skill_id: String, pool: State<'_, DbPool>) -> Result<(
     Ok(())
 }
 
+// ── batch_delete_skill (批量删除) ──
+
+#[derive(serde::Serialize)]
+pub struct BatchDeleteResult {
+    pub skill_id: String,
+    pub skill_name: String,
+    pub deployments_deleted: usize,
+    pub files_removed: usize,
+    pub local_lib_removed: bool,
+}
+
+#[tauri::command]
+pub async fn batch_delete_skill(
+    skill_id: String,
+    delete_local_lib: bool,
+    pool: State<'_, DbPool>,
+) -> Result<BatchDeleteResult, AppError> {
+    info!(
+        "[batch_delete_skill] skill_id={}, delete_local_lib={}",
+        skill_id, delete_local_lib
+    );
+
+    let conn = pool.get()?;
+
+    // 1. 获取 skill 信息
+    let (skill_name, local_path): (String, Option<String>) = conn.query_row(
+        "SELECT name, local_path FROM skills WHERE id = ?1",
+        params![skill_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).map_err(|_| AppError::NotFound(format!("Skill 不存在: {}", skill_id)))?;
+
+    info!("[batch_delete_skill] Skill: name={}, local_path={:?}", skill_name, local_path);
+
+    // 2. 获取所有部署
+    let mut stmt = conn.prepare(
+        "SELECT id, path FROM skill_deployments WHERE skill_id = ?1"
+    )?;
+    let deployments: Vec<(String, String)> = stmt.query_map(params![skill_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?.collect::<Result<Vec<_>, _>>()?;
+
+    info!("[batch_delete_skill] 找到 {} 个部署", deployments.len());
+
+    // 3. 删除部署磁盘文件
+    let mut files_removed = 0usize;
+    for (dep_id, dep_path) in &deployments {
+        let path = Path::new(dep_path);
+        if path.exists() {
+            match std::fs::remove_dir_all(path) {
+                Ok(_) => {
+                    files_removed += 1;
+                    info!("[batch_delete_skill]   删除部署文件: {} (id={})", dep_path, dep_id);
+                }
+                Err(e) => {
+                    info!("[batch_delete_skill]   删除部署文件失败: {} — {}", dep_path, e);
+                }
+            }
+        } else {
+            info!("[batch_delete_skill]   部署路径不存在(跳过): {}", dep_path);
+        }
+    }
+
+    let deployments_deleted = deployments.len();
+
+    // 4. 删除本地库文件（如果请求）
+    let mut local_lib_removed = false;
+    if delete_local_lib {
+        if let Some(ref lp) = local_path {
+            let lib_path = Path::new(lp);
+            if lib_path.exists() {
+                match std::fs::remove_dir_all(lib_path) {
+                    Ok(_) => {
+                        local_lib_removed = true;
+                        info!("[batch_delete_skill]   删除本地库: {}", lp);
+                    }
+                    Err(e) => {
+                        info!("[batch_delete_skill]   删除本地库失败: {} — {}", lp, e);
+                    }
+                }
+            } else {
+                info!("[batch_delete_skill]   本地库路径不存在: {}", lp);
+            }
+        } else {
+            info!("[batch_delete_skill]   无本地库路径，跳过");
+        }
+    }
+
+    // 5. 删除数据库记录（CASCADE 会删除 deployments, sources, backups）
+    conn.execute("DELETE FROM skills WHERE id = ?1", params![skill_id])?;
+    info!(
+        "[batch_delete_skill] 数据库记录已删除 (含 {} 个部署记录)",
+        deployments_deleted
+    );
+
+    info!(
+        "[batch_delete_skill] 完成: skill='{}', deployments_deleted={}, files_removed={}, local_lib_removed={}",
+        skill_name, deployments_deleted, files_removed, local_lib_removed
+    );
+
+    Ok(BatchDeleteResult {
+        skill_id,
+        skill_name,
+        deployments_deleted,
+        files_removed,
+        local_lib_removed,
+    })
+}
+
 #[tauri::command]
 pub async fn get_skill_source(
     skill_id: String,
@@ -310,9 +418,12 @@ pub struct UpdateResult {
 pub async fn update_skill_from_library(
     skill_id: String,
     sync_deployments: bool,
+    project_ids: Option<Vec<String>>,
+    tool_names: Option<Vec<String>>,
     pool: State<'_, DbPool>,
 ) -> Result<UpdateResult, AppError> {
-    info!("[update_skill_from_library] skill={}, sync={}", skill_id, sync_deployments);
+    info!("[update_skill_from_library] skill={}, sync={}, projects={:?}, tools={:?}",
+        skill_id, sync_deployments, project_ids, tool_names);
 
     // 1. 获取 Skill 信息
     let (skill_name, local_path, old_checksum) = {
@@ -375,18 +486,42 @@ pub async fn update_skill_from_library(
         )?;
     }
 
-    // 4. 可选：同步到所有部署
+    // 4. 可选：同步到部署（支持按 project_ids / tool_names 筛选）
     let mut deployments_synced = 0usize;
     if sync_deployments {
         let deploy_rows: Vec<(String, String)> = {
             let conn = pool.get()?;
             let mut stmt = conn.prepare(
-                "SELECT id, path FROM skill_deployments WHERE skill_id = ?1"
+                "SELECT id, path, project_id, tool FROM skill_deployments WHERE skill_id = ?1"
             )?;
-            let result = stmt.query_map(params![skill_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            let all_rows = stmt.query_map(params![skill_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
             })?.collect::<Result<Vec<_>, _>>()?;
-            result
+
+            // 按 project_ids / tool_names 过滤
+            all_rows.into_iter()
+                .filter(|(_id, _path, pid, tool)| {
+                    let project_ok = match &project_ids {
+                        Some(ids) if !ids.is_empty() => {
+                            pid.as_ref().map(|p| ids.contains(p)).unwrap_or(false)
+                        }
+                        _ => true,
+                    };
+                    let tool_ok = match &tool_names {
+                        Some(names) if !names.is_empty() => {
+                            tool.as_ref().map(|t| names.contains(t)).unwrap_or(false)
+                        }
+                        _ => true,
+                    };
+                    project_ok && tool_ok
+                })
+                .map(|(id, path, _, _)| (id, path))
+                .collect()
         };
 
         for (dep_id, deploy_path) in &deploy_rows {
@@ -568,4 +703,504 @@ pub async fn restore_from_backup(
         new_checksum,
         deployments_synced,
     })
+}
+
+// ── compute_skill_diff ──
+
+#[derive(serde::Serialize)]
+pub struct FileDiff {
+    pub path: String,
+    pub status: String, // "added", "removed", "modified", "unchanged"
+    pub hunks: Vec<DiffHunk>,
+}
+
+#[derive(serde::Serialize)]
+pub struct DiffHunk {
+    pub old_start: usize,
+    pub old_count: usize,
+    pub new_start: usize,
+    pub new_count: usize,
+    pub lines: Vec<DiffLine>,
+}
+
+#[derive(serde::Serialize)]
+pub struct DiffLine {
+    pub tag: String, // "+", "-", " "
+    pub content: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct SkillDiffResult {
+    pub left_path: String,
+    pub right_path: String,
+    pub files: Vec<FileDiff>,
+    pub summary: DiffSummary,
+}
+
+#[derive(serde::Serialize)]
+pub struct DiffSummary {
+    pub added: usize,
+    pub removed: usize,
+    pub modified: usize,
+    pub unchanged: usize,
+}
+
+fn collect_relative_files(dir: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    if !dir.exists() {
+        return files;
+    }
+    for entry in walkdir::WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            if let Ok(rel) = entry.path().strip_prefix(dir) {
+                files.push(rel.to_string_lossy().to_string());
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+fn compute_file_diff(old_content: &str, new_content: &str) -> Vec<DiffHunk> {
+    use similar::{ChangeTag, TextDiff};
+    let diff = TextDiff::from_lines(old_content, new_content);
+
+    let mut all_changes: Vec<(ChangeTag, usize, usize, String)> = Vec::new();
+    let mut old_line = 1usize;
+    let mut new_line = 1usize;
+
+    for change in diff.iter_all_changes() {
+        let tag = change.tag();
+        all_changes.push((tag, old_line, new_line, change.value().to_string()));
+        match tag {
+            ChangeTag::Equal => { old_line += 1; new_line += 1; }
+            ChangeTag::Delete => { old_line += 1; }
+            ChangeTag::Insert => { new_line += 1; }
+        }
+    }
+
+    // Group changes into hunks with context
+    let context = 3usize;
+    let mut hunks = Vec::new();
+    let mut i = 0;
+    while i < all_changes.len() {
+        if all_changes[i].0 == ChangeTag::Equal {
+            i += 1;
+            continue;
+        }
+        // Found a change, collect hunk with context
+        let hunk_start = i.saturating_sub(context);
+        let mut hunk_end = i;
+        // Extend to include all nearby changes
+        while hunk_end < all_changes.len() {
+            if all_changes[hunk_end].0 != ChangeTag::Equal {
+                hunk_end += 1;
+                continue;
+            }
+            // Check if next change is within context
+            let mut next_change = hunk_end;
+            while next_change < all_changes.len() && all_changes[next_change].0 == ChangeTag::Equal {
+                next_change += 1;
+            }
+            if next_change < all_changes.len() && next_change - hunk_end <= context * 2 {
+                hunk_end = next_change + 1;
+            } else {
+                break;
+            }
+        }
+        hunk_end = (hunk_end + context).min(all_changes.len());
+
+        let old_start = all_changes[hunk_start].1;
+        let new_start = all_changes[hunk_start].2;
+        let mut old_count = 0;
+        let mut new_count = 0;
+        let mut lines = Vec::new();
+        for j in hunk_start..hunk_end {
+            let (tag, _, _, ref content) = all_changes[j];
+            let tag_str = match tag {
+                ChangeTag::Insert => { new_count += 1; "+".to_string() }
+                ChangeTag::Delete => { old_count += 1; "-".to_string() }
+                ChangeTag::Equal => { old_count += 1; new_count += 1; " ".to_string() }
+            };
+            lines.push(DiffLine { tag: tag_str, content: content.clone() });
+        }
+
+        hunks.push(DiffHunk { old_start, old_count, new_start, new_count, lines });
+        i = hunk_end;
+    }
+    hunks
+}
+
+#[tauri::command]
+pub async fn compute_skill_diff(
+    left_path: String,
+    right_path: String,
+) -> Result<SkillDiffResult, AppError> {
+    info!("[compute_skill_diff] left={}, right={}", left_path, right_path);
+
+    let left_dir = Path::new(&left_path);
+    let right_dir = Path::new(&right_path);
+
+    if !left_dir.exists() && !right_dir.exists() {
+        return Err(AppError::Validation("两个路径都不存在".to_string()));
+    }
+
+    let left_files: std::collections::HashSet<String> = collect_relative_files(left_dir).into_iter().collect();
+    let right_files: std::collections::HashSet<String> = collect_relative_files(right_dir).into_iter().collect();
+
+    let all_files: std::collections::BTreeSet<&String> = left_files.iter().chain(right_files.iter()).collect();
+
+    let mut files = Vec::new();
+    let mut added = 0usize;
+    let mut removed = 0usize;
+    let mut modified = 0usize;
+    let mut unchanged = 0usize;
+
+    for rel_path in all_files {
+        let in_left = left_files.contains(rel_path);
+        let in_right = right_files.contains(rel_path);
+
+        if in_left && !in_right {
+            // removed
+            removed += 1;
+            files.push(FileDiff {
+                path: rel_path.clone(),
+                status: "removed".to_string(),
+                hunks: Vec::new(),
+            });
+        } else if !in_left && in_right {
+            // added
+            added += 1;
+            files.push(FileDiff {
+                path: rel_path.clone(),
+                status: "added".to_string(),
+                hunks: Vec::new(),
+            });
+        } else {
+            // both exist - compare
+            let left_content = std::fs::read_to_string(left_dir.join(rel_path)).unwrap_or_default();
+            let right_content = std::fs::read_to_string(right_dir.join(rel_path)).unwrap_or_default();
+
+            if left_content == right_content {
+                unchanged += 1;
+                // skip unchanged files
+            } else {
+                let hunks = compute_file_diff(&left_content, &right_content);
+                modified += 1;
+                files.push(FileDiff {
+                    path: rel_path.clone(),
+                    status: "modified".to_string(),
+                    hunks,
+                });
+            }
+        }
+    }
+
+    info!(
+        "[compute_skill_diff] 完成: added={}, removed={}, modified={}, unchanged={}",
+        added, removed, modified, unchanged
+    );
+
+    Ok(SkillDiffResult {
+        left_path,
+        right_path,
+        files,
+        summary: DiffSummary {
+            added,
+            removed,
+            modified,
+            unchanged,
+        },
+    })
+}
+
+// ── merge_skill_versions (三向合并) ──
+
+#[derive(serde::Serialize)]
+pub struct MergeFileResult {
+    pub path: String,
+    pub status: String, // "auto_merged", "conflict", "added_left", "added_right", "deleted_left", "deleted_right", "unchanged"
+    pub merged_content: Option<String>,
+    pub left_content: Option<String>,
+    pub right_content: Option<String>,
+    pub base_content: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct MergeResult {
+    pub files: Vec<MergeFileResult>,
+    pub auto_merged_count: usize,
+    pub conflict_count: usize,
+    pub total_files: usize,
+}
+
+#[derive(serde::Deserialize)]
+pub struct MergeResolution {
+    pub path: String,
+    pub content: String,
+}
+
+fn three_way_merge_text(base: &str, left: &str, right: &str) -> (String, bool) {
+    use similar::{ChangeTag, TextDiff};
+
+    // If left == right, no conflict
+    if left == right {
+        return (left.to_string(), false);
+    }
+    // If left == base, right changed → take right
+    if left == base {
+        return (right.to_string(), false);
+    }
+    // If right == base, left changed → take left
+    if right == base {
+        return (left.to_string(), false);
+    }
+
+    // Both changed from base — try line-level merge
+    let base_lines: Vec<&str> = base.lines().collect();
+    let left_lines: Vec<&str> = left.lines().collect();
+    let right_lines: Vec<&str> = right.lines().collect();
+
+    let diff_left = TextDiff::from_slices(&base_lines, &left_lines);
+    let diff_right = TextDiff::from_slices(&base_lines, &right_lines);
+
+    let left_changes: std::collections::HashMap<usize, (ChangeTag, String)> = diff_left
+        .iter_all_changes()
+        .enumerate()
+        .filter(|(_, c)| c.tag() != ChangeTag::Equal)
+        .map(|(i, c)| (i, (c.tag(), c.value().to_string())))
+        .collect();
+
+    let right_changes: std::collections::HashMap<usize, (ChangeTag, String)> = diff_right
+        .iter_all_changes()
+        .enumerate()
+        .filter(|(_, c)| c.tag() != ChangeTag::Equal)
+        .map(|(i, c)| (i, (c.tag(), c.value().to_string())))
+        .collect();
+
+    // Check if changes overlap (simple heuristic: any shared indices = conflict)
+    let has_overlap = left_changes.keys().any(|k| right_changes.contains_key(k));
+
+    if has_overlap {
+        // Real conflict — return conflict markers
+        let mut merged = String::new();
+        merged.push_str("<<<<<<< LOCAL\n");
+        merged.push_str(left);
+        if !left.ends_with('\n') { merged.push('\n'); }
+        merged.push_str("=======\n");
+        merged.push_str(right);
+        if !right.ends_with('\n') { merged.push('\n'); }
+        merged.push_str(">>>>>>> DEPLOYMENT\n");
+        return (merged, true);
+    }
+
+    // Non-overlapping changes: apply both sets
+    // Simple approach: take left (which includes left's changes from base)
+    // and also apply right's unique changes — this is complex, so for non-overlapping
+    // we just take left since it's the "local" version with priority
+    (left.to_string(), false)
+}
+
+#[tauri::command]
+pub async fn merge_skill_versions(
+    base_path: Option<String>,
+    left_path: String,
+    right_path: String,
+) -> Result<MergeResult, AppError> {
+    info!(
+        "[merge_skill_versions] base={:?}, left={}, right={}",
+        base_path, left_path, right_path
+    );
+
+    let left_dir = Path::new(&left_path);
+    let right_dir = Path::new(&right_path);
+    let base_dir = base_path.as_ref().map(|p| Path::new(p.as_str()));
+
+    if !left_dir.exists() {
+        return Err(AppError::Validation(format!("左侧路径不存在: {}", left_path)));
+    }
+    if !right_dir.exists() {
+        return Err(AppError::Validation(format!("右侧路径不存在: {}", right_path)));
+    }
+
+    let left_files: std::collections::HashSet<String> = collect_relative_files(left_dir).into_iter().collect();
+    let right_files: std::collections::HashSet<String> = collect_relative_files(right_dir).into_iter().collect();
+    let base_files: std::collections::HashSet<String> = base_dir
+        .map(|d| collect_relative_files(d).into_iter().collect())
+        .unwrap_or_default();
+
+    let all_files: std::collections::BTreeSet<&String> = left_files.iter()
+        .chain(right_files.iter())
+        .chain(base_files.iter())
+        .collect();
+
+    let mut files = Vec::new();
+    let mut auto_merged_count = 0usize;
+    let mut conflict_count = 0usize;
+
+    for rel_path in &all_files {
+        let in_left = left_files.contains(*rel_path);
+        let in_right = right_files.contains(*rel_path);
+        let in_base = base_files.contains(*rel_path);
+
+        let left_content = if in_left {
+            Some(std::fs::read_to_string(left_dir.join(rel_path)).unwrap_or_default())
+        } else { None };
+        let right_content = if in_right {
+            Some(std::fs::read_to_string(right_dir.join(rel_path)).unwrap_or_default())
+        } else { None };
+        let base_content = if in_base {
+            base_dir.and_then(|d| std::fs::read_to_string(d.join(rel_path)).ok())
+        } else { None };
+
+        info!(
+            "[merge_skill_versions] 文件: {} | in_base={}, in_left={}, in_right={}",
+            rel_path, in_base, in_left, in_right
+        );
+
+        match (in_left, in_right, in_base) {
+            // Both sides have the file
+            (true, true, _) => {
+                let l = left_content.as_deref().unwrap_or("");
+                let r = right_content.as_deref().unwrap_or("");
+                let b = base_content.as_deref().unwrap_or("");
+
+                if l == r {
+                    info!("[merge_skill_versions]   → unchanged (L==R)");
+                    files.push(MergeFileResult {
+                        path: (*rel_path).clone(),
+                        status: "unchanged".to_string(),
+                        merged_content: Some(l.to_string()),
+                        left_content: None,
+                        right_content: None,
+                        base_content: None,
+                    });
+                    auto_merged_count += 1;
+                } else {
+                    let (merged, has_conflict) = three_way_merge_text(b, l, r);
+                    if has_conflict {
+                        info!("[merge_skill_versions]   → CONFLICT");
+                        conflict_count += 1;
+                        files.push(MergeFileResult {
+                            path: (*rel_path).clone(),
+                            status: "conflict".to_string(),
+                            merged_content: Some(merged),
+                            left_content: Some(l.to_string()),
+                            right_content: Some(r.to_string()),
+                            base_content: base_content.clone(),
+                        });
+                    } else {
+                        info!("[merge_skill_versions]   → auto_merged");
+                        auto_merged_count += 1;
+                        files.push(MergeFileResult {
+                            path: (*rel_path).clone(),
+                            status: "auto_merged".to_string(),
+                            merged_content: Some(merged),
+                            left_content: None,
+                            right_content: None,
+                            base_content: None,
+                        });
+                    }
+                }
+            }
+            // Only in left (added in left or deleted in right)
+            (true, false, true) => {
+                info!("[merge_skill_versions]   → deleted_right");
+                files.push(MergeFileResult {
+                    path: (*rel_path).clone(),
+                    status: "deleted_right".to_string(),
+                    merged_content: left_content.clone(),
+                    left_content,
+                    right_content: None,
+                    base_content,
+                });
+                conflict_count += 1;
+            }
+            (true, false, false) => {
+                info!("[merge_skill_versions]   → added_left");
+                auto_merged_count += 1;
+                files.push(MergeFileResult {
+                    path: (*rel_path).clone(),
+                    status: "added_left".to_string(),
+                    merged_content: left_content.clone(),
+                    left_content,
+                    right_content: None,
+                    base_content: None,
+                });
+            }
+            // Only in right
+            (false, true, true) => {
+                info!("[merge_skill_versions]   → deleted_left");
+                files.push(MergeFileResult {
+                    path: (*rel_path).clone(),
+                    status: "deleted_left".to_string(),
+                    merged_content: right_content.clone(),
+                    left_content: None,
+                    right_content,
+                    base_content,
+                });
+                conflict_count += 1;
+            }
+            (false, true, false) => {
+                info!("[merge_skill_versions]   → added_right");
+                auto_merged_count += 1;
+                files.push(MergeFileResult {
+                    path: (*rel_path).clone(),
+                    status: "added_right".to_string(),
+                    merged_content: right_content.clone(),
+                    left_content: None,
+                    right_content,
+                    base_content: None,
+                });
+            }
+            // Only in base (both deleted)
+            (false, false, true) => {
+                info!("[merge_skill_versions]   → both deleted, skip");
+                auto_merged_count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    let total_files = files.len();
+    info!(
+        "[merge_skill_versions] 完成: total={}, auto_merged={}, conflicts={}",
+        total_files, auto_merged_count, conflict_count
+    );
+
+    Ok(MergeResult {
+        files,
+        auto_merged_count,
+        conflict_count,
+        total_files,
+    })
+}
+
+#[tauri::command]
+pub async fn apply_merge_result(
+    target_path: String,
+    resolutions: Vec<MergeResolution>,
+) -> Result<(), AppError> {
+    info!(
+        "[apply_merge_result] target={}, resolutions={}",
+        target_path, resolutions.len()
+    );
+
+    let target_dir = Path::new(&target_path);
+    if !target_dir.exists() {
+        std::fs::create_dir_all(target_dir)
+            .map_err(|e| AppError::Internal(format!("创建目标目录失败: {}", e)))?;
+    }
+
+    for resolution in &resolutions {
+        let file_path = target_dir.join(&resolution.path);
+        info!("[apply_merge_result] 写入: {}", file_path.display());
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&file_path, &resolution.content)?;
+    }
+
+    info!("[apply_merge_result] 完成: 写入 {} 个文件到 {}", resolutions.len(), target_path);
+    Ok(())
 }

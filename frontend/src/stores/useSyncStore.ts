@@ -6,13 +6,13 @@ import type { ChangeEventRow, SyncHistoryRow, GitExportConfigRow } from '@/lib/t
 function mapChangeEventRow(row: ChangeEventRow): ChangeEvent {
   return {
     id: row.id,
-    skill_name: '',
-    project_name: '',
-    tool_name: 'windsurf',
+    skill_name: row.skill_name || row.deployment_id,
+    project_name: row.project_name || '',
+    tool_name: (row.tool || 'windsurf') as ChangeEvent['tool_name'],
     event_type: row.event_type as ChangeEvent['event_type'],
     status: (row.resolution === 'pending' ? 'pending' : row.resolution === 'ignored' ? 'ignored' : 'resolved') as ChangeEvent['status'],
     detected_at: row.created_at,
-    file_path: row.deployment_id,
+    file_path: row.deploy_path || row.deployment_id,
   }
 }
 

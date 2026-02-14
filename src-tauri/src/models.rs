@@ -179,6 +179,10 @@ pub struct ChangeEvent {
     pub resolution: Option<String>,
     pub resolved_at: Option<String>,
     pub created_at: String,
+    pub skill_name: Option<String>,
+    pub project_name: Option<String>,
+    pub tool: Option<String>,
+    pub deploy_path: Option<String>,
 }
 
 // ── Git Export Config ──

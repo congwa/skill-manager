@@ -831,3 +831,107 @@ pub async fn update_library_from_deployment(
         other_deployments_synced,
     })
 }
+
+// ── get_skills_by_tool (按工具分组查询) ──
+
+#[derive(serde::Serialize)]
+pub struct ToolSkillInfo {
+    pub skill_id: String,
+    pub skill_name: String,
+    pub skill_description: String,
+    pub deployment_id: String,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
+    pub deploy_path: String,
+    pub status: String,
+    pub checksum: Option<String>,
+    pub last_synced: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ToolGroupResult {
+    pub tool: String,
+    pub skills: Vec<ToolSkillInfo>,
+    pub count: usize,
+}
+
+#[tauri::command]
+pub async fn get_skills_by_tool(
+    tool: Option<String>,
+    pool: State<'_, DbPool>,
+) -> Result<Vec<ToolGroupResult>, AppError> {
+    info!("[get_skills_by_tool] tool={:?}", tool);
+
+    let conn = pool.get()?;
+
+    let tools: Vec<String> = if let Some(ref t) = tool {
+        info!("[get_skills_by_tool] 查询指定工具: {}", t);
+        vec![t.clone()]
+    } else {
+        info!("[get_skills_by_tool] 查询所有工具");
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT tool FROM skill_deployments ORDER BY tool"
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        info!("[get_skills_by_tool] 发现 {} 种工具: {:?}", rows.len(), rows);
+        rows
+    };
+
+    let mut results = Vec::new();
+
+    for t in &tools {
+        let mut stmt = conn.prepare(
+            "SELECT d.id, d.skill_id, d.project_id, d.path, d.status, d.checksum, d.last_synced,
+                    s.name, s.description,
+                    p.name as project_name
+             FROM skill_deployments d
+             JOIN skills s ON s.id = d.skill_id
+             LEFT JOIN projects p ON p.id = d.project_id
+             WHERE d.tool = ?1
+             ORDER BY s.name, p.name"
+        )?;
+
+        let skills: Vec<ToolSkillInfo> = stmt.query_map(params![t], |row| {
+            Ok(ToolSkillInfo {
+                deployment_id: row.get(0)?,
+                skill_id: row.get(1)?,
+                project_id: row.get(2)?,
+                deploy_path: row.get(3)?,
+                status: row.get(4)?,
+                checksum: row.get(5)?,
+                last_synced: row.get(6)?,
+                skill_name: row.get(7)?,
+                skill_description: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                project_name: row.get(9)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+
+        let count = skills.len();
+        info!(
+            "[get_skills_by_tool] 工具 '{}': {} 个部署",
+            t, count
+        );
+
+        for skill in &skills {
+            info!(
+                "[get_skills_by_tool]   {} | project={:?} | status={} | path={}",
+                skill.skill_name, skill.project_name, skill.status, skill.deploy_path
+            );
+        }
+
+        results.push(ToolGroupResult {
+            tool: t.clone(),
+            skills,
+            count,
+        });
+    }
+
+    let total: usize = results.iter().map(|r| r.count).sum();
+    info!(
+        "[get_skills_by_tool] 完成: {} 种工具, 共 {} 个部署",
+        results.len(), total
+    );
+
+    Ok(results)
+}

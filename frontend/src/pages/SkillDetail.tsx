@@ -16,6 +16,10 @@ import {
 import {
   Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { cn, toolColors, toolNames, statusColors, sourceLabels, relativeTime } from '@/lib/utils'
@@ -71,15 +75,25 @@ export default function SkillDetail() {
     }
   }
 
-  const handleDeleteSkill = async () => {
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  const handleBatchDelete = async (withLocalLib: boolean) => {
+    setDeleting(true)
     try {
-      await skillsApi.delete(skillId!)
+      const result = await skillsApi.batchDelete(skillId!, withLocalLib)
       await useSkillStore.getState().fetchSkills()
-      toast.success('Skill 已删除')
+      await useSkillStore.getState().fetchDeployments()
+      toast.success(
+        `${result.skill_name} 已删除: ${result.deployments_deleted} 个部署${result.local_lib_removed ? ' + 本地库' : ''}`
+      )
       navigate('/skills')
     } catch (e) {
-      console.error('delete error:', e)
-      toast.error('删除失败')
+      console.error('batch delete error:', e)
+      toast.error('删除失败: ' + String(e))
+    } finally {
+      setDeleting(false)
+      setDeleteDialogOpen(false)
     }
   }
 
@@ -124,7 +138,7 @@ export default function SkillDetail() {
             <DropdownMenuContent>
               <DropdownMenuItem><Download className="h-4 w-4 mr-2" /> 检查更新</DropdownMenuItem>
               <DropdownMenuItem><Clock className="h-4 w-4 mr-2" /> 版本回滚</DropdownMenuItem>
-              <DropdownMenuItem className="text-strawberry-500" onClick={handleDeleteSkill}><Trash2 className="h-4 w-4 mr-2" /> 删除</DropdownMenuItem>
+              <DropdownMenuItem className="text-strawberry-500" onClick={() => setDeleteDialogOpen(true)}><Trash2 className="h-4 w-4 mr-2" /> 批量删除</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -306,6 +320,35 @@ export default function SkillDetail() {
           </TabsContent>
         </div>
       </Tabs>
+
+      {/* 批量删除确认对话框 */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除 {skill?.name}</AlertDialogTitle>
+            <AlertDialogDescription>
+              此操作将删除该 Skill 的所有 {skillDeployments.length} 个部署（包括磁盘文件）和数据库记录。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-honey-500 hover:bg-honey-600 text-white"
+              disabled={deleting}
+              onClick={(e) => { e.preventDefault(); handleBatchDelete(false) }}
+            >
+              {deleting ? '删除中...' : '从所有部署删除'}
+            </AlertDialogAction>
+            <AlertDialogAction
+              className="bg-strawberry-500 hover:bg-strawberry-600 text-white"
+              disabled={deleting}
+              onClick={(e) => { e.preventDefault(); handleBatchDelete(true) }}
+            >
+              {deleting ? '删除中...' : '完全删除（含本地库）'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

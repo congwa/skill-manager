@@ -97,10 +97,84 @@ export const skillsApi = {
   writeFile: (filePath: string, content: string) => invoke<void>('write_skill_file', { filePath, content }),
   listFiles: (dirPath: string) => invoke<string[]>('list_skill_files', { dirPath }),
   checkUpdates: () => invoke<SkillUpdateInfoRow[]>('check_skill_updates'),
-  updateFromLibrary: (skillId: string, syncDeployments: boolean) =>
-    invoke<SkillUpdateResultRow>('update_skill_from_library', { skillId, syncDeployments }),
+  updateFromLibrary: (skillId: string, syncDeployments: boolean, projectIds?: string[], toolNames?: string[]) =>
+    invoke<SkillUpdateResultRow>('update_skill_from_library', {
+      skillId, syncDeployments,
+      projectIds: projectIds ?? null,
+      toolNames: toolNames ?? null,
+    }),
   restoreFromBackup: (backupId: string, syncDeployments: boolean) =>
     invoke<RestoreResultRow>('restore_from_backup', { backupId, syncDeployments }),
+  batchDelete: (skillId: string, deleteLocalLib: boolean) =>
+    invoke<BatchDeleteResultData>('batch_delete_skill', { skillId, deleteLocalLib }),
+  computeDiff: (leftPath: string, rightPath: string) =>
+    invoke<SkillDiffResult>('compute_skill_diff', { leftPath, rightPath }),
+  mergeVersions: (leftPath: string, rightPath: string, basePath?: string) =>
+    invoke<MergeResultData>('merge_skill_versions', { leftPath, rightPath, basePath: basePath ?? null }),
+  applyMerge: (targetPath: string, resolutions: MergeResolutionData[]) =>
+    invoke<void>('apply_merge_result', { targetPath, resolutions }),
+}
+
+export interface BatchDeleteResultData {
+  skill_id: string
+  skill_name: string
+  deployments_deleted: number
+  files_removed: number
+  local_lib_removed: boolean
+}
+
+export interface SkillDiffResult {
+  left_path: string
+  right_path: string
+  files: FileDiffItem[]
+  summary: DiffSummary
+}
+
+export interface FileDiffItem {
+  path: string
+  status: 'added' | 'removed' | 'modified' | 'unchanged'
+  hunks: DiffHunk[]
+}
+
+export interface DiffHunk {
+  old_start: number
+  old_count: number
+  new_start: number
+  new_count: number
+  lines: DiffLine[]
+}
+
+export interface DiffLine {
+  tag: '+' | '-' | ' '
+  content: string
+}
+
+export interface DiffSummary {
+  added: number
+  removed: number
+  modified: number
+  unchanged: number
+}
+
+export interface MergeResultData {
+  files: MergeFileResultData[]
+  auto_merged_count: number
+  conflict_count: number
+  total_files: number
+}
+
+export interface MergeFileResultData {
+  path: string
+  status: 'auto_merged' | 'conflict' | 'added_left' | 'added_right' | 'deleted_left' | 'deleted_right' | 'unchanged'
+  merged_content: string | null
+  left_content: string | null
+  right_content: string | null
+  base_content: string | null
+}
+
+export interface MergeResolutionData {
+  path: string
+  content: string
 }
 
 export interface RestoreResultRow {
@@ -191,6 +265,25 @@ export interface ReconcileReportData {
   change_events_created: number
 }
 
+export interface ToolSkillInfoData {
+  skill_id: string
+  skill_name: string
+  skill_description: string
+  deployment_id: string
+  project_id: string | null
+  project_name: string | null
+  deploy_path: string
+  status: string
+  checksum: string | null
+  last_synced: string | null
+}
+
+export interface ToolGroupResultData {
+  tool: string
+  skills: ToolSkillInfoData[]
+  count: number
+}
+
 export const deploymentsApi = {
   getAll: () => invoke<DeploymentRow[]>('get_deployments'),
   getBySkill: (skillId: string) =>
@@ -212,6 +305,8 @@ export const deploymentsApi = {
     invoke<SyncResultData>('sync_deployment', { deploymentId }),
   checkConsistency: () =>
     invoke<ConsistencyReportData>('check_deployment_consistency'),
+  getSkillsByTool: (tool?: string) =>
+    invoke<ToolGroupResultData[]>('get_skills_by_tool', { tool: tool ?? null }),
   reconcile: () =>
     invoke<ReconcileReportData>('reconcile_all_deployments'),
   updateLibraryFromDeployment: (deploymentId: string, syncOtherDeployments: boolean) =>
@@ -289,6 +384,10 @@ export interface ChangeEventRow {
   resolution: string | null
   resolved_at: string | null
   created_at: string
+  skill_name: string | null
+  project_name: string | null
+  tool: string | null
+  deploy_path: string | null
 }
 
 export interface SyncHistoryRow {
@@ -369,6 +468,22 @@ export interface GitCloneResult {
   skills_found: GitRepoSkill[]
 }
 
+export interface GitRepoUpdateInfo {
+  config_id: string
+  remote_url: string
+  branch: string
+  skills: GitSkillUpdateStatus[]
+  has_updates: boolean
+  remote_commit: string | null
+}
+
+export interface GitSkillUpdateStatus {
+  name: string
+  local_checksum: string | null
+  remote_checksum: string | null
+  status: 'updated' | 'unchanged' | 'new_remote' | 'deleted_remote'
+}
+
 export interface GitImportResult {
   skills_imported: number
   skills_skipped: number
@@ -385,6 +500,8 @@ export const gitApi = {
     invoke<GitCloneResult>('clone_git_repo', { remoteUrl, branch }),
   importFromRepo: (clonePath: string, skillNames: string[], overwriteConflicts: boolean, sourceUrl?: string) =>
     invoke<GitImportResult>('import_from_git_repo', { clonePath, skillNames, overwriteConflicts, sourceUrl: sourceUrl ?? null }),
+  checkRepoUpdates: (configId?: string) =>
+    invoke<GitRepoUpdateInfo[]>('check_git_repo_updates', { configId: configId ?? null }),
 }
 
 // ── skills.sh ──
@@ -435,6 +552,19 @@ export interface SkillsShInstallResult {
   conflict: InstallConflict | null
 }
 
+export interface BrowseResultData {
+  category: string
+  skills: SkillsShSearchResult[]
+  total: number
+}
+
+export interface SkillCategoryData {
+  id: string
+  name: string
+  icon: string
+  keywords: string[]
+}
+
 export interface RemoteUpdateInfo {
   skill_id: string
   skill_name: string
@@ -468,4 +598,8 @@ export const skillsShApi = {
   }) => invoke<SkillsShInstallResult>('install_from_skills_sh', params),
   checkRemoteUpdates: () =>
     invoke<RemoteUpdateInfo[]>('check_remote_updates'),
+  browsePopular: (category?: string) =>
+    invoke<BrowseResultData>('browse_popular_skills_sh', { category: category ?? null }),
+  getCategories: () =>
+    invoke<SkillCategoryData[]>('get_skill_categories'),
 }

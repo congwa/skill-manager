@@ -646,3 +646,199 @@ pub async fn import_from_git_repo(
         ),
     })
 }
+
+// ── 5. check_git_repo_updates ──
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitRepoUpdateInfo {
+    pub config_id: String,
+    pub remote_url: String,
+    pub branch: String,
+    pub skills: Vec<GitSkillUpdateStatus>,
+    pub has_updates: bool,
+    pub remote_commit: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitSkillUpdateStatus {
+    pub name: String,
+    pub local_checksum: Option<String>,
+    pub remote_checksum: Option<String>,
+    pub status: String, // "updated", "unchanged", "new_remote", "deleted_remote"
+}
+
+#[tauri::command]
+pub async fn check_git_repo_updates(
+    config_id: Option<String>,
+    pool: State<'_, DbPool>,
+) -> Result<Vec<GitRepoUpdateInfo>, AppError> {
+    info!("[check_git_repo_updates] config_id={:?}", config_id);
+
+    // 1. 获取 git_export_config
+    let conn = pool.get()?;
+    let configs: Vec<(String, String, String, String)> = if let Some(ref cid) = config_id {
+        info!("[check_git_repo_updates] 查询指定配置: {}", cid);
+        let mut stmt = conn.prepare(
+            "SELECT id, remote_url, branch, provider FROM git_export_config WHERE id = ?1"
+        )?;
+        let rows = stmt.query_map(params![cid], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?, row.get::<_, String>(3)?))
+        })?.collect::<Result<Vec<_>, _>>()?;
+        rows
+    } else {
+        info!("[check_git_repo_updates] 查询所有配置");
+        let mut stmt = conn.prepare(
+            "SELECT id, remote_url, branch, provider FROM git_export_config"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?, row.get::<_, String>(3)?))
+        })?.collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    drop(conn);
+
+    info!("[check_git_repo_updates] 找到 {} 个 Git 配置", configs.len());
+
+    if configs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let skills_lib = get_skills_lib_path(&pool)?;
+    let mut results = Vec::new();
+
+    for (cid, remote_url, branch, _provider) in &configs {
+        info!("[check_git_repo_updates] 检查仓库: {} (branch={})", remote_url, branch);
+
+        // 2. Clone to temp dir (shallow)
+        let clone_dir = std::env::temp_dir().join(format!("skills-manager-check-{}", cid));
+        if clone_dir.exists() {
+            let _ = std::fs::remove_dir_all(&clone_dir);
+        }
+
+        let (ok, clone_msg) = run_git_allow_fail(
+            &["clone", "--branch", branch, "--single-branch", "--depth", "1",
+              remote_url, clone_dir.to_str().unwrap_or("")],
+            &std::env::temp_dir(),
+        );
+
+        if !ok {
+            info!("[check_git_repo_updates] clone 失败: {}, 尝试不指定分支", clone_msg);
+            let (ok2, msg2) = run_git_allow_fail(
+                &["clone", "--depth", "1", remote_url, clone_dir.to_str().unwrap_or("")],
+                &std::env::temp_dir(),
+            );
+            if !ok2 {
+                info!("[check_git_repo_updates] clone 最终失败: {}", msg2);
+                continue;
+            }
+        }
+
+        // 3. Get remote commit hash
+        let remote_commit = run_git(&["rev-parse", "HEAD"], &clone_dir).ok();
+        info!("[check_git_repo_updates] 远程 commit: {:?}", remote_commit);
+
+        // 4. Scan remote skills dir
+        let remote_skills_dir = clone_dir.join("skills");
+        let mut skill_statuses = Vec::new();
+        let mut has_updates = false;
+
+        if remote_skills_dir.exists() && remote_skills_dir.is_dir() {
+            let entries: Vec<_> = std::fs::read_dir(&remote_skills_dir)
+                .map(|rd| rd.filter_map(|e| e.ok()).collect())
+                .unwrap_or_default();
+
+            info!("[check_git_repo_updates] 远程 skills/ 目录中发现 {} 个项", entries.len());
+
+            for entry in entries {
+                let skill_name = entry.file_name().to_string_lossy().to_string();
+                if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+
+                let remote_path = remote_skills_dir.join(&skill_name);
+                let local_path = skills_lib.join(&skill_name);
+
+                let remote_checksum = compute_dir_checksum(&remote_path);
+                let local_checksum = if local_path.exists() {
+                    compute_dir_checksum(&local_path)
+                } else {
+                    None
+                };
+
+                let status = if !local_path.exists() {
+                    has_updates = true;
+                    "new_remote".to_string()
+                } else if remote_checksum == local_checksum {
+                    "unchanged".to_string()
+                } else {
+                    has_updates = true;
+                    "updated".to_string()
+                };
+
+                info!(
+                    "[check_git_repo_updates]   Skill '{}': status={}, local_cksum={:?}, remote_cksum={:?}",
+                    skill_name, status, local_checksum, remote_checksum
+                );
+
+                skill_statuses.push(GitSkillUpdateStatus {
+                    name: skill_name,
+                    local_checksum,
+                    remote_checksum,
+                    status,
+                });
+            }
+
+            // Check for skills deleted from remote (exist locally but not in remote)
+            if skills_lib.exists() {
+                let local_entries: Vec<_> = std::fs::read_dir(&skills_lib)
+                    .map(|rd| rd.filter_map(|e| e.ok()).collect())
+                    .unwrap_or_default();
+
+                for entry in local_entries {
+                    let skill_name = entry.file_name().to_string_lossy().to_string();
+                    if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        continue;
+                    }
+                    if !skill_statuses.iter().any(|s| s.name == skill_name) {
+                        let local_checksum = compute_dir_checksum(&skills_lib.join(&skill_name));
+                        info!(
+                            "[check_git_repo_updates]   Skill '{}': status=deleted_remote (本地有,远程无)",
+                            skill_name
+                        );
+                        skill_statuses.push(GitSkillUpdateStatus {
+                            name: skill_name,
+                            local_checksum,
+                            remote_checksum: None,
+                            status: "deleted_remote".to_string(),
+                        });
+                    }
+                }
+            }
+        } else {
+            info!("[check_git_repo_updates] 远程仓库无 skills/ 目录");
+        }
+
+        // 5. Cleanup
+        let _ = std::fs::remove_dir_all(&clone_dir);
+
+        let update_count = skill_statuses.iter().filter(|s| s.status != "unchanged").count();
+        info!(
+            "[check_git_repo_updates] 仓库 {} 检查完成: {} 个 Skill, {} 个有变化, has_updates={}",
+            remote_url, skill_statuses.len(), update_count, has_updates
+        );
+
+        results.push(GitRepoUpdateInfo {
+            config_id: cid.clone(),
+            remote_url: remote_url.clone(),
+            branch: branch.clone(),
+            skills: skill_statuses,
+            has_updates,
+            remote_commit,
+        });
+    }
+
+    info!("[check_git_repo_updates] 全部检查完成: {} 个仓库", results.len());
+    Ok(results)
+}

@@ -66,6 +66,7 @@ pub fn run() {
             commands::skills::get_skill_by_id,
             commands::skills::create_skill,
             commands::skills::delete_skill,
+            commands::skills::batch_delete_skill,
             commands::skills::get_skill_source,
             commands::skills::get_skill_backups,
             commands::skills::read_skill_file,
@@ -74,6 +75,9 @@ pub fn run() {
             commands::skills::check_skill_updates,
             commands::skills::update_skill_from_library,
             commands::skills::restore_from_backup,
+            commands::skills::compute_skill_diff,
+            commands::skills::merge_skill_versions,
+            commands::skills::apply_merge_result,
             // Deployments
             commands::deployments::get_deployments,
             commands::deployments::get_skill_deployments,
@@ -84,6 +88,7 @@ pub fn run() {
             commands::deployments::deploy_skill_to_project,
             commands::deployments::sync_deployment,
             commands::deployments::check_deployment_consistency,
+            commands::deployments::get_skills_by_tool,
             commands::deployments::reconcile_all_deployments,
             commands::deployments::update_library_from_deployment,
             // Settings
@@ -108,12 +113,15 @@ pub fn run() {
             commands::git::export_skills_to_git,
             commands::git::clone_git_repo,
             commands::git::import_from_git_repo,
+            commands::git::check_git_repo_updates,
             // skills.sh
             commands::skillssh::search_skills_sh,
             commands::skillssh::get_skill_repo_tree,
             commands::skillssh::fetch_skill_content,
             commands::skillssh::install_from_skills_sh,
             commands::skillssh::check_remote_updates,
+            commands::skillssh::browse_popular_skills_sh,
+            commands::skillssh::get_skill_categories,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

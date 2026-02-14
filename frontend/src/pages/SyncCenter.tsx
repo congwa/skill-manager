@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  GitBranch, CloudUpload, CloudDownload, ShieldCheck,
+  GitBranch, CloudUpload, ShieldCheck,
   BellRing, AlertTriangle, RefreshCw, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -20,10 +20,15 @@ import { Progress } from '@/components/ui/progress'
 import { useSyncStore } from '@/stores/useSyncStore'
 import { cn, relativeTime, toolNames } from '@/lib/utils'
 import { toast } from 'sonner'
-import { deploymentsApi, settingsApi, gitApi } from '@/lib/tauri-api'
-import { Upload } from 'lucide-react'
-import type { ConsistencyDetailData } from '@/lib/tauri-api'
+import { deploymentsApi, settingsApi, gitApi, skillsApi } from '@/lib/tauri-api'
+import { Upload, Eye, GitMerge } from 'lucide-react'
+import type { ConsistencyDetailData, SkillDiffResult, MergeResultData, GitRepoUpdateInfo } from '@/lib/tauri-api'
 import { useSkillStore } from '@/stores/useSkillStore'
+import DiffViewer from '@/components/DiffViewer'
+import MergeEditor from '@/components/MergeEditor'
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
 
 export default function SyncCenter() {
   const { changeEvents, syncHistory, gitConfig, resolveEvent, ignoreEvent } = useSyncStore()
@@ -35,7 +40,78 @@ export default function SyncCenter() {
   const [exportOpen, setExportOpen] = useState(false)
   const [consistencyDetails, setConsistencyDetails] = useState<ConsistencyDetailData[]>([])
   const [syncingId, setSyncingId] = useState<string | null>(null)
+  const [diffResult, setDiffResult] = useState<SkillDiffResult | null>(null)
+  const [diffOpen, setDiffOpen] = useState(false)
+  const [diffLoading, setDiffLoading] = useState<string | null>(null)
+  const [mergeResult, setMergeResult] = useState<MergeResultData | null>(null)
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const [mergeLoading, setMergeLoading] = useState<string | null>(null)
+  const [mergeTargetPath, setMergeTargetPath] = useState('')
+  const [gitUpdates, setGitUpdates] = useState<GitRepoUpdateInfo[]>([])
+  const [checkingGit, setCheckingGit] = useState(false)
+  const skills = useSkillStore((s) => s.skills)
   const pendingCount = changeEvents.filter((e) => e.status === 'pending').length
+
+  const handleViewDiff = async (detail: ConsistencyDetailData) => {
+    const skill = skills.find((s) => s.name === detail.skill_name)
+    if (!skill?.local_path) {
+      toast.error('无法获取 Skill 本地路径')
+      return
+    }
+    setDiffLoading(detail.deployment_id)
+    try {
+      const result = await skillsApi.computeDiff(skill.local_path, detail.deploy_path)
+      setDiffResult(result)
+      setDiffOpen(true)
+    } catch (e) {
+      toast.error('计算 Diff 失败: ' + String(e))
+    } finally {
+      setDiffLoading(null)
+    }
+  }
+
+  const handleMerge = async (detail: ConsistencyDetailData) => {
+    const skill = skills.find((s) => s.name === detail.skill_name)
+    if (!skill?.local_path) {
+      toast.error('无法获取 Skill 本地路径')
+      return
+    }
+    setMergeLoading(detail.deployment_id)
+    try {
+      console.log(`[SyncCenter] 合并: left=${skill.local_path}, right=${detail.deploy_path}`)
+      const result = await skillsApi.mergeVersions(skill.local_path, detail.deploy_path)
+      console.log(`[SyncCenter] 合并结果: auto=${result.auto_merged_count}, conflicts=${result.conflict_count}`)
+      setMergeResult(result)
+      setMergeTargetPath(skill.local_path)
+      setMergeOpen(true)
+    } catch (e) {
+      toast.error('合并失败: ' + String(e))
+    } finally {
+      setMergeLoading(null)
+    }
+  }
+
+  const handleCheckGitUpdates = async () => {
+    setCheckingGit(true)
+    try {
+      console.log('[SyncCenter] 检查 Git 仓库更新...')
+      const results = await gitApi.checkRepoUpdates()
+      console.log(`[SyncCenter] Git 检查完成: ${results.length} 个仓库`)
+      setGitUpdates(results)
+      const totalUpdates = results.reduce((acc, r) => acc + r.skills.filter((s) => s.status !== 'unchanged').length, 0)
+      if (totalUpdates > 0) {
+        toast.warning(`发现 ${totalUpdates} 个 Git Skill 有变化`)
+      } else {
+        toast.success('Git 仓库无更新')
+      }
+      setActiveTab('git-updates')
+    } catch (e) {
+      console.error('[SyncCenter] Git 检查失败:', e)
+      toast.error('检查 Git 更新失败: ' + String(e))
+    } finally {
+      setCheckingGit(false)
+    }
+  }
 
   const handleConsistencyCheck = async () => {
     setChecking(true)
@@ -185,8 +261,8 @@ export default function SyncCenter() {
         <Button variant="outline" onClick={() => setExportOpen(true)} className="rounded-xl">
           <CloudUpload className="h-4 w-4 mr-1" /> 备份导出到 Git
         </Button>
-        <Button variant="outline" className="rounded-xl">
-          <CloudDownload className="h-4 w-4 mr-1" /> 从 Git 恢复
+        <Button variant="outline" className="rounded-xl" onClick={handleCheckGitUpdates} disabled={checkingGit}>
+          <GitBranch className="h-4 w-4 mr-1" /> {checkingGit ? '检查中...' : '检查 Git 更新'}
         </Button>
       </div>
 
@@ -195,6 +271,7 @@ export default function SyncCenter() {
         <TabsList className="bg-cream-100">
           <TabsTrigger value="events">变更事件 ({pendingCount})</TabsTrigger>
           <TabsTrigger value="report">一致性报告</TabsTrigger>
+          <TabsTrigger value="git-updates">Git 更新{gitUpdates.some((r) => r.has_updates) ? ' ❗' : ''}</TabsTrigger>
           <TabsTrigger value="history">操作历史</TabsTrigger>
         </TabsList>
 
@@ -313,6 +390,24 @@ export default function SyncCenter() {
                                 >
                                   <Upload className="h-3 w-3 mr-1" /> 回写到库
                                 </Button>
+                                {detail.status === 'diverged' && (
+                                  <>
+                                    <Button
+                                      variant="ghost" size="sm" className="text-xs h-7 text-sky-500 hover:text-sky-600"
+                                      disabled={diffLoading === detail.deployment_id}
+                                      onClick={() => handleViewDiff(detail)}
+                                    >
+                                      <Eye className="h-3 w-3 mr-1" /> {diffLoading === detail.deployment_id ? '加载中...' : '查看 Diff'}
+                                    </Button>
+                                    <Button
+                                      variant="ghost" size="sm" className="text-xs h-7 text-lavender-500 hover:text-lavender-600"
+                                      disabled={mergeLoading === detail.deployment_id}
+                                      onClick={() => handleMerge(detail)}
+                                    >
+                                      <GitMerge className="h-3 w-3 mr-1" /> {mergeLoading === detail.deployment_id ? '加载中...' : '合并'}
+                                    </Button>
+                                  </>
+                                )}
                               </>
                             )}
                             <Button
@@ -329,6 +424,56 @@ export default function SyncCenter() {
                   </CollapsibleContent>
                 </Card>
               </Collapsible>
+            ))
+          )}
+        </TabsContent>
+
+        {/* Git 更新 */}
+        <TabsContent value="git-updates" className="space-y-4">
+          {gitUpdates.length === 0 ? (
+            <Card className="border border-cream-200">
+              <CardContent className="text-center text-cream-400 py-8">
+                请点击“检查 Git 更新”按钮检测远程仓库变化
+              </CardContent>
+            </Card>
+          ) : (
+            gitUpdates.map((repo) => (
+              <Card key={repo.config_id} className="border border-cream-200">
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <GitBranch className="h-4 w-4 text-lavender-500" />
+                    <span className="font-semibold text-cream-800 text-sm">{repo.remote_url}</span>
+                    <Badge variant="outline" className="text-[10px]">{repo.branch}</Badge>
+                    {repo.has_updates ? (
+                      <Badge variant="outline" className="bg-honey-50 text-honey-500 text-[10px] ml-auto">有更新</Badge>
+                    ) : (
+                      <Badge variant="outline" className="bg-mint-50 text-mint-500 text-[10px] ml-auto">已是最新</Badge>
+                    )}
+                  </div>
+                  {repo.remote_commit && (
+                    <p className="text-[10px] text-cream-400 font-mono">远程 commit: {repo.remote_commit.slice(0, 12)}</p>
+                  )}
+                  <div className="divide-y divide-cream-100">
+                    {repo.skills.filter((s) => s.status !== 'unchanged').map((skill) => {
+                      const statusMap: Record<string, { label: string; color: string }> = {
+                        updated: { label: '有更新', color: 'bg-honey-50 text-honey-500' },
+                        new_remote: { label: '远程新增', color: 'bg-mint-50 text-mint-500' },
+                        deleted_remote: { label: '远程已删', color: 'bg-strawberry-50 text-strawberry-500' },
+                      }
+                      const st = statusMap[skill.status] ?? { label: skill.status, color: '' }
+                      return (
+                        <div key={skill.name} className="flex items-center gap-3 py-2">
+                          <span className="text-sm font-medium text-cream-800">{skill.name}</span>
+                          <Badge variant="outline" className={cn('text-[10px]', st.color)}>{st.label}</Badge>
+                        </div>
+                      )
+                    })}
+                    {repo.skills.every((s) => s.status === 'unchanged') && (
+                      <p className="text-center text-cream-400 py-3 text-sm">所有 Skill 均为最新</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
             ))
           )}
         </TabsContent>
@@ -398,6 +543,36 @@ export default function SyncCenter() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Diff 查看 Dialog */}
+      <Dialog open={diffOpen} onOpenChange={setDiffOpen}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>文件差异对比</DialogTitle>
+          </DialogHeader>
+          {diffResult && <DiffViewer diff={diffResult} />}
+        </DialogContent>
+      </Dialog>
+
+      {/* 合并编辑器 Dialog */}
+      <Dialog open={mergeOpen} onOpenChange={setMergeOpen}>
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>三向合并编辑器</DialogTitle>
+          </DialogHeader>
+          {mergeResult && (
+            <MergeEditor
+              mergeResult={mergeResult}
+              targetPath={mergeTargetPath}
+              onComplete={() => {
+                setMergeOpen(false)
+                handleConsistencyCheck()
+              }}
+              onCancel={() => setMergeOpen(false)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -22,6 +22,7 @@ import { toast } from 'sonner'
 import { skillsApi, skillsShApi } from '@/lib/tauri-api'
 import type { SkillUpdateInfoRow, RemoteUpdateInfo } from '@/lib/tauri-api'
 import { useSkillStore } from '@/stores/useSkillStore'
+import { useProjectStore } from '@/stores/useProjectStore'
 import { useSyncStore } from '@/stores/useSyncStore'
 
 interface UpdateItem extends SkillUpdateInfoRow {
@@ -40,7 +41,19 @@ export default function UpdateManager() {
   const [lastCheckTime, setLastCheckTime] = useState<string | null>(null)
   const [remoteUpdates, setRemoteUpdates] = useState<RemoteUpdateInfo[]>([])
   const [checkingRemote, setCheckingRemote] = useState(false)
+  const [selectedTools, setSelectedTools] = useState<string[]>([])
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
   const syncHistory = useSyncStore((s) => s.syncHistory)
+  const projects = useProjectStore((s) => s.projects)
+
+  const TOOL_LIST = ['windsurf', 'cursor', 'claude-code', 'codex', 'trae']
+
+  const toggleTool = (tool: string) => {
+    setSelectedTools((prev) => prev.includes(tool) ? prev.filter((t) => t !== tool) : [...prev, tool])
+  }
+  const toggleProject = (pid: string) => {
+    setSelectedProjectIds((prev) => prev.includes(pid) ? prev.filter((p) => p !== pid) : [...prev, pid])
+  }
 
   const handleCheck = async () => {
     setChecking(true)
@@ -69,8 +82,10 @@ export default function UpdateManager() {
     setUpdating(id)
     try {
       const syncDeps = updateScope !== 'lib'
-      console.log(`[UpdateManager] 更新 Skill: ${id}, syncDeps=${syncDeps}`)
-      const result = await skillsApi.updateFromLibrary(id, syncDeps)
+      const pIds = updateScope === 'custom' && selectedProjectIds.length > 0 ? selectedProjectIds : undefined
+      const tNames = updateScope === 'custom' && selectedTools.length > 0 ? selectedTools : undefined
+      console.log(`[UpdateManager] 更新 Skill: ${id}, syncDeps=${syncDeps}, projects=${pIds}, tools=${tNames}`)
+      const result = await skillsApi.updateFromLibrary(id, syncDeps, pIds, tNames)
       console.log(`[UpdateManager] 更新完成: ${result.deployments_synced} 个部署已同步`)
       await useSkillStore.getState().fetchSkills()
       await useSkillStore.getState().fetchDeployments()
@@ -94,7 +109,9 @@ export default function UpdateManager() {
     for (const item of selected) {
       try {
         const syncDeps = updateScope !== 'lib'
-        await skillsApi.updateFromLibrary(item.skill_id, syncDeps)
+        const pIds = updateScope === 'custom' && selectedProjectIds.length > 0 ? selectedProjectIds : undefined
+        const tNames = updateScope === 'custom' && selectedTools.length > 0 ? selectedTools : undefined
+        await skillsApi.updateFromLibrary(item.skill_id, syncDeps, pIds, tNames)
         completed++
         setBatchProgress(Math.min(completed * step, 100))
       } catch (e) {
@@ -185,6 +202,53 @@ export default function UpdateManager() {
               </SelectContent>
             </Select>
           </div>
+
+          {/* 自定义选择面板 */}
+          {updateScope === 'custom' && (
+            <Card className="border border-lavender-200 bg-lavender-50/30">
+              <CardContent className="p-4 space-y-3">
+                <p className="text-sm font-semibold text-cream-700">选择同步范围（留空=同步全部）</p>
+                <div>
+                  <p className="text-xs text-cream-500 mb-1.5">按工具筛选</p>
+                  <div className="flex flex-wrap gap-2">
+                    {TOOL_LIST.map((tool) => (
+                      <Badge
+                        key={tool}
+                        variant="outline"
+                        className={cn('cursor-pointer text-xs transition-colors',
+                          selectedTools.includes(tool) ? 'bg-peach-100 text-peach-600 border-peach-300' : 'text-cream-500 hover:bg-cream-100'
+                        )}
+                        onClick={() => toggleTool(tool)}
+                      >
+                        {selectedTools.includes(tool) && <Check className="h-3 w-3 mr-0.5" />}
+                        {tool}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+                {projects.length > 0 && (
+                  <div>
+                    <p className="text-xs text-cream-500 mb-1.5">按项目筛选</p>
+                    <div className="flex flex-wrap gap-2">
+                      {projects.map((p) => (
+                        <Badge
+                          key={p.id}
+                          variant="outline"
+                          className={cn('cursor-pointer text-xs transition-colors',
+                            selectedProjectIds.includes(p.id) ? 'bg-peach-100 text-peach-600 border-peach-300' : 'text-cream-500 hover:bg-cream-100'
+                          )}
+                          onClick={() => toggleProject(p.id)}
+                        >
+                          {selectedProjectIds.includes(p.id) && <Check className="h-3 w-3 mr-0.5" />}
+                          {p.name}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           <div className="space-y-3">
             <AnimatePresence>

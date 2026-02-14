@@ -49,14 +49,14 @@
 
 | # | PRD 章节 | 缺失功能 | 说明 |
 |---|----------|----------|------|
-| 8 | 3.5.6 | 选择性同步（按项目/按工具） | update_skill_from_library 只有 sync_deployments: bool，不支持筛选特定项目或工具 |
-| 9 | 3.5.7 | Diff 计算命令 | 没有 compute_skill_diff 命令来计算两个 Skill 版本的差异，PRD 多处要求展示 Diff |
-| 10 | 3.5.7 | 三向合并 | 没有合并功能，PRD 在冲突处理的多个场景中要求"打开合并编辑器" |
-| 11 | 3.7.1 | Git 仓库更新检测 | 没有 check_git_repo_updates 命令（git fetch + 比对） |
-| 12 | 3.3.1 | 排行榜 / 分类浏览 | search_skills_sh 只支持关键词搜索，没有排行榜和分类浏览 API |
-| 13 | 3.2.1 | 按工具分组查询 | 没有 get_skills_by_tool 命令，PRD 要求按工具视图 |
-| 14 | 3.5.7 | 批量删除处理 | 缺少"从所有位置删除"和"完全删除（含本地库）"的批量操作命令 |
-| 15 | 3.6.2 | 变更事件关联 Skill 信息 | change_events 表只记录 deployment_id，前端需要额外查询才能展示 Skill 名称和项目 |
+| ~~8~~ | ~~3.5.6~~ | ~~选择性同步（按项目/按工具）~~ ✅ 已实现 | 后端: update_skill_from_library 新增 project_ids/tool_names 筛选参数；前端: UpdateManager.tsx "自定义选择"模式下可按工具/项目筛选同步范围 |
+| ~~9~~ | ~~3.5.7~~ | ~~Diff 计算命令~~ ✅ 已实现 | 后端: compute_skill_diff 基于 similar crate 实现文件级+行级 diff；前端: DiffViewer 组件展示差异，SyncCenter 偏离项可"查看 Diff" |
+| ~~10~~ | ~~3.5.7~~ | ~~三向合并~~ ✅ 已实现 | 后端: merge_skill_versions (三路diff+冲突标记) + apply_merge_result (写入合并结果)；前端: MergeEditor 组件 (左右对比+手动编辑+应用)，SyncCenter 偏离项可"合并" |
+| ~~11~~ | ~~3.7.1~~ | ~~Git 仓库更新检测~~ ✅ 已实现 | 后端: check_git_repo_updates 浅克隆远程仓库并逐 Skill 比对 checksum（含详细 log）；前端: SyncCenter 新增"检查 Git 更新"按钮 + git-updates Tab 展示结果 |
+| ~~12~~ | ~~3.3.1~~ | ~~排行榜 / 分类浏览~~ ✅ 已实现 | 后端: browse_popular_skills_sh（多关键词聚合去重按 installs 排序）+ get_skill_categories（6 个预定义分类）；前端: SkillsShSearch 分类标签浏览热门 Skill |
+| ~~13~~ | ~~3.2.1~~ | ~~按工具分组查询~~ ✅ 已实现 | 后端: get_skills_by_tool JOIN skills+projects 按工具分组查询（含详细 log）；前端: SkillsStore 新增"按工具查看" Tab 展示分组卡片 |
+| ~~14~~ | ~~3.5.7~~ | ~~批量删除处理~~ ✅ 已实现 | 后端: batch_delete_skill 删除所有部署磁盘文件+数据库记录，可选删除本地库（含详细 log）；前端: SkillDetail 批量删除对话框支持"从所有部署删除"和"完全删除（含本地库）" |
+| ~~15~~ | ~~3.6.2~~ | ~~变更事件关联 Skill 信息~~ ✅ 已实现 | 后端: get_change_events JOIN deployments+skills+projects 返回 skill_name/project_name/tool/deploy_path（含 log）；前端: ChangeEventRow 新增字段，mapChangeEventRow 映射真实 Skill 信息 |
 | 16 | 3.5.9 | 导出前一致性检查 | export_skills_to_git 不在导出前检查偏离状态 |
 | 17 | 3.4.2 | 远程新增 Skill 自动导入 | 导出时执行 git pull，但不扫描远程新增的 Skill |
 

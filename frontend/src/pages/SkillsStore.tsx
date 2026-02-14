@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Search, Download, Package, FolderOpen, Globe, HardDrive } from 'lucide-react'
+import { Search, Download, Package, FolderOpen, Globe, HardDrive, Wrench, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -11,6 +11,7 @@ import { cn, toolNames, sourceLabels } from '@/lib/utils'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { deploymentsApi } from '@/lib/tauri-api'
+import type { ToolGroupResultData } from '@/lib/tauri-api'
 import { toast } from 'sonner'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -36,6 +37,26 @@ export default function SkillsStore() {
   const [deployDialog, setDeployDialog] = useState<{ skillId: string; skillName: string } | null>(null)
   const [selectedProject, setSelectedProject] = useState('')
   const [selectedTool, setSelectedTool] = useState<ToolName>('windsurf')
+  const [toolGroups, setToolGroups] = useState<ToolGroupResultData[]>([])
+  const [loadingTools, setLoadingTools] = useState(false)
+
+  const loadToolView = async () => {
+    setLoadingTools(true)
+    try {
+      const data = await deploymentsApi.getSkillsByTool()
+      setToolGroups(data)
+    } catch (e) {
+      toast.error('加载工具视图失败: ' + String(e))
+    } finally {
+      setLoadingTools(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === 'by-tool' && toolGroups.length === 0) {
+      loadToolView()
+    }
+  }, [activeTab])
 
   const topSkills = [...skills]
     .map((s) => ({ ...s, deployCount: deployments.filter((d) => d.skill_id === s.id).length }))
@@ -103,11 +124,71 @@ export default function SkillsStore() {
           <TabsTrigger value="local" className="gap-1.5">
             <HardDrive className="h-4 w-4" /> 本地 Skill 库
           </TabsTrigger>
+          <TabsTrigger value="by-tool" className="gap-1.5">
+            <Wrench className="h-4 w-4" /> 按工具查看
+          </TabsTrigger>
         </TabsList>
 
         {/* skills.sh 商城 Tab */}
         <TabsContent value="store" className="mt-6">
           <SkillsShSearch />
+        </TabsContent>
+
+        {/* 按工具查看 Tab */}
+        <TabsContent value="by-tool" className="mt-6 space-y-6">
+          {loadingTools ? (
+            <div className="text-center py-12">
+              <Loader2 className="h-8 w-8 text-peach-400 animate-spin mx-auto" />
+              <p className="text-sm text-cream-500 mt-3">加载中...</p>
+            </div>
+          ) : toolGroups.length === 0 ? (
+            <div className="text-center py-16">
+              <div className="text-5xl mb-4">🛠️</div>
+              <h2 className="text-lg font-display font-bold text-cream-700 mb-2">暂无部署记录</h2>
+              <p className="text-cream-500">先将 Skill 部署到项目后，这里会按工具分组展示</p>
+            </div>
+          ) : (
+            toolGroups.map((group) => (
+              <div key={group.tool}>
+                <div className="flex items-center gap-3 mb-3">
+                  <Badge variant="outline" className="text-sm px-3 py-1 bg-lavender-50 text-lavender-500">
+                    {(toolNames as Record<string, string>)[group.tool] ?? group.tool}
+                  </Badge>
+                  <span className="text-xs text-cream-400">{group.count} 个部署</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                  {group.skills.map((skill) => (
+                    <Card key={skill.deployment_id} className="border border-cream-200 shadow-card hover:shadow-card-hover transition-shadow">
+                      <CardContent className="p-4 space-y-2">
+                        <div className="flex items-start justify-between">
+                          <div className="min-w-0 flex-1">
+                            <h3 className="font-semibold text-cream-800 text-sm truncate">{skill.skill_name}</h3>
+                            {skill.skill_description && (
+                              <p className="text-xs text-cream-500 mt-0.5 line-clamp-1">{skill.skill_description}</p>
+                            )}
+                          </div>
+                          <Badge
+                            variant="outline"
+                            className={cn('text-[10px] shrink-0 ml-2',
+                              skill.status === 'synced' ? 'bg-mint-50 text-mint-500' :
+                              skill.status === 'diverged' ? 'bg-honey-50 text-honey-500' :
+                              'bg-strawberry-50 text-strawberry-500'
+                            )}
+                          >
+                            {skill.status === 'synced' ? '已同步' : skill.status === 'diverged' ? '已偏离' : skill.status}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-cream-400">
+                          {skill.project_name && <span className="truncate">{skill.project_name}</span>}
+                          <span className="font-mono truncate ml-auto text-[10px]">{skill.deploy_path.split('/').slice(-3).join('/')}</span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
         </TabsContent>
 
         {/* 本地 Skill 库 Tab */}
