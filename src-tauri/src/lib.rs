@@ -58,6 +58,7 @@ pub fn run() {
             // Projects
             commands::projects::get_projects,
             commands::projects::add_project,
+            commands::projects::batch_add_projects,
             commands::projects::remove_project,
             commands::projects::get_project_deployments,
             commands::projects::get_dashboard_stats,
@@ -78,6 +79,7 @@ pub fn run() {
             commands::skills::compute_skill_diff,
             commands::skills::merge_skill_versions,
             commands::skills::apply_merge_result,
+            commands::skills::open_in_editor,
             // Deployments
             commands::deployments::get_deployments,
             commands::deployments::get_skill_deployments,
@@ -114,6 +116,7 @@ pub fn run() {
             commands::git::clone_git_repo,
             commands::git::import_from_git_repo,
             commands::git::check_git_repo_updates,
+            commands::git::scan_remote_new_skills,
             // skills.sh
             commands::skillssh::search_skills_sh,
             commands::skillssh::get_skill_repo_tree,

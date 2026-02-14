@@ -86,6 +86,103 @@ pub async fn add_project(path: String, pool: State<'_, DbPool>) -> Result<Projec
     Ok(project)
 }
 
+// ── batch_add_projects (批量导入) ──
+
+#[derive(serde::Serialize)]
+pub struct BatchAddResult {
+    pub added: Vec<Project>,
+    pub skipped: Vec<BatchSkippedItem>,
+    pub total: usize,
+}
+
+#[derive(serde::Serialize)]
+pub struct BatchSkippedItem {
+    pub path: String,
+    pub reason: String,
+}
+
+#[tauri::command]
+pub async fn batch_add_projects(
+    paths: Vec<String>,
+    pool: State<'_, DbPool>,
+) -> Result<BatchAddResult, AppError> {
+    info!("[batch_add_projects] 批量添加 {} 个路径", paths.len());
+
+    let conn = pool.get()?;
+    let mut added = Vec::new();
+    let mut skipped = Vec::new();
+
+    for path in &paths {
+        let project_path = std::path::Path::new(path);
+
+        if !project_path.exists() || !project_path.is_dir() {
+            info!("[batch_add_projects]   跳过（路径无效）: {}", path);
+            skipped.push(BatchSkippedItem {
+                path: path.clone(),
+                reason: "路径不存在或不是目录".into(),
+            });
+            continue;
+        }
+
+        let name = project_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let id = Uuid::new_v4().to_string();
+
+        match conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            params![id, name, path],
+        ) {
+            Ok(_) => {
+                let project = conn.query_row(
+                    "SELECT id, name, path, status, last_scanned, 0, 0, created_at, updated_at
+                     FROM projects WHERE id = ?1",
+                    params![id],
+                    |row| Ok(Project {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        path: row.get(2)?,
+                        status: row.get(3)?,
+                        last_scanned: row.get(4)?,
+                        skill_count: row.get(5)?,
+                        tool_count: row.get(6)?,
+                        created_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                    }),
+                )?;
+                info!("[batch_add_projects]   添加成功: {} ({})", name, path);
+                added.push(project);
+            }
+            Err(e) => {
+                let reason = if let rusqlite::Error::SqliteFailure(_, Some(ref msg)) = e {
+                    if msg.contains("UNIQUE") {
+                        "项目已存在".into()
+                    } else {
+                        format!("数据库错误: {}", msg)
+                    }
+                } else {
+                    format!("数据库错误: {}", e)
+                };
+                info!("[batch_add_projects]   跳过（{}）: {}", reason, path);
+                skipped.push(BatchSkippedItem {
+                    path: path.clone(),
+                    reason,
+                });
+            }
+        }
+    }
+
+    let total = paths.len();
+    info!(
+        "[batch_add_projects] 完成: {} 个添加, {} 个跳过, 共 {} 个",
+        added.len(), skipped.len(), total
+    );
+
+    Ok(BatchAddResult { added, skipped, total })
+}
+
 #[tauri::command]
 pub async fn remove_project(project_id: String, pool: State<'_, DbPool>) -> Result<(), AppError> {
     info!("[remove_project] 删除项目: {}", project_id);

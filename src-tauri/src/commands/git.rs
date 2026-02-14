@@ -892,3 +892,149 @@ pub async fn check_git_repo_updates(
     info!("[check_git_repo_updates] 全部检查完成: {} 个仓库", results.len());
     Ok(results)
 }
+
+// ── 6. scan_remote_new_skills ──
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RemoteNewSkill {
+    pub name: String,
+    pub description: Option<String>,
+    pub version: Option<String>,
+    pub dir_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanRemoteResult {
+    pub config_id: String,
+    pub remote_url: String,
+    pub new_skills: Vec<RemoteNewSkill>,
+    pub total_remote: usize,
+    pub total_local: usize,
+    pub clone_path: String,
+}
+
+#[tauri::command]
+pub async fn scan_remote_new_skills(
+    config_id: String,
+    pool: State<'_, DbPool>,
+) -> Result<ScanRemoteResult, AppError> {
+    info!("[scan_remote_new_skills] config_id={}", config_id);
+
+    let conn = pool.get()?;
+
+    let (remote_url, branch): (String, String) = conn.query_row(
+        "SELECT remote_url, branch FROM git_export_config WHERE id = ?1",
+        params![config_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+
+    info!(
+        "[scan_remote_new_skills] remote={}, branch={}",
+        remote_url, branch
+    );
+
+    // 浅克隆
+    let clone_dir = std::env::temp_dir().join("skills-manager-scan-remote");
+    if clone_dir.exists() {
+        let _ = std::fs::remove_dir_all(&clone_dir);
+    }
+
+    let (ok, msg) = run_git_allow_fail(
+        &[
+            "clone", "--branch", &branch, "--single-branch",
+            "--depth", "1", &remote_url,
+            clone_dir.to_str().unwrap_or(""),
+        ],
+        &std::env::temp_dir(),
+    );
+
+    if !ok {
+        return Err(AppError::Internal(format!(
+            "克隆远程仓库失败: {}", msg
+        )));
+    }
+
+    // 扫描远程 skills/ 目录
+    let skills_dir = clone_dir.join("skills");
+    let mut new_skills = Vec::new();
+    let mut total_remote = 0usize;
+
+    if skills_dir.exists() {
+        // 获取本地所有 Skill 名称
+        let mut stmt = conn.prepare("SELECT name FROM skills")?;
+        let local_names: std::collections::HashSet<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<std::collections::HashSet<_>, _>>()?;
+
+        let total_local = local_names.len();
+        info!(
+            "[scan_remote_new_skills] 本地 {} 个 Skill",
+            total_local
+        );
+
+        for entry in std::fs::read_dir(&skills_dir)
+            .map_err(|e| AppError::Internal(format!("读取远程 skills 目录失败: {}", e)))?
+        {
+            let entry = entry.map_err(|e| AppError::Internal(e.to_string()))?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            total_remote += 1;
+            let dir_name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            // 解析 SKILL.md
+            let skill_md = path.join("SKILL.md");
+            let (name, description, version) = if skill_md.exists() {
+                let content = std::fs::read_to_string(&skill_md).unwrap_or_default();
+                let (n, d, v) = parse_skill_frontmatter(&content);
+                (n.unwrap_or(dir_name.clone()), d, v)
+            } else {
+                (dir_name.clone(), None, None)
+            };
+
+            if !local_names.contains(&name) {
+                info!(
+                    "[scan_remote_new_skills]   新增: {} (dir={}, ver={:?})",
+                    name, dir_name, version
+                );
+                new_skills.push(RemoteNewSkill {
+                    name,
+                    description,
+                    version,
+                    dir_name,
+                });
+            }
+        }
+
+        info!(
+            "[scan_remote_new_skills] 远程 {} 个 Skill, 本地 {} 个, 新增 {} 个",
+            total_remote, total_local, new_skills.len()
+        );
+
+        return Ok(ScanRemoteResult {
+            config_id,
+            remote_url,
+            new_skills,
+            total_remote,
+            total_local,
+            clone_path: clone_dir.to_string_lossy().to_string(),
+        });
+    }
+
+    info!("[scan_remote_new_skills] 远程仓库无 skills/ 目录");
+
+    Ok(ScanRemoteResult {
+        config_id,
+        remote_url,
+        new_skills,
+        total_remote: 0,
+        total_local: 0,
+        clone_path: clone_dir.to_string_lossy().to_string(),
+    })
+}

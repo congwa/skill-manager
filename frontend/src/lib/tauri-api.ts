@@ -35,9 +35,16 @@ export interface ProjectDetailDeployment {
   last_synced: string | null
 }
 
+export interface BatchAddResultData {
+  added: ProjectRow[]
+  skipped: { path: string; reason: string }[]
+  total: number
+}
+
 export const projectsApi = {
   getAll: () => invoke<ProjectRow[]>('get_projects'),
   add: (path: string) => invoke<ProjectRow>('add_project', { path }),
+  batchAdd: (paths: string[]) => invoke<BatchAddResultData>('batch_add_projects', { paths }),
   remove: (projectId: string) => invoke<void>('remove_project', { projectId }),
   getDeployments: (projectId: string) =>
     invoke<ProjectDetailDeployment[]>('get_project_deployments', { projectId }),
@@ -105,6 +112,8 @@ export const skillsApi = {
     }),
   restoreFromBackup: (backupId: string, syncDeployments: boolean) =>
     invoke<RestoreResultRow>('restore_from_backup', { backupId, syncDeployments }),
+  openInEditor: (path: string, editor?: string) =>
+    invoke<void>('open_in_editor', { path, editor: editor ?? null }),
   batchDelete: (skillId: string, deleteLocalLib: boolean) =>
     invoke<BatchDeleteResultData>('batch_delete_skill', { skillId, deleteLocalLib }),
   computeDiff: (leftPath: string, rightPath: string) =>
@@ -457,6 +466,22 @@ export interface GitExportResult {
   diverged_skills: string[]
 }
 
+export interface RemoteNewSkillData {
+  name: string
+  description: string | null
+  version: string | null
+  dir_name: string
+}
+
+export interface ScanRemoteResultData {
+  config_id: string
+  remote_url: string
+  new_skills: RemoteNewSkillData[]
+  total_remote: number
+  total_local: number
+  clone_path: string
+}
+
 export interface GitRepoSkill {
   name: string
   description: string | null
@@ -504,6 +529,8 @@ export const gitApi = {
     invoke<GitImportResult>('import_from_git_repo', { clonePath, skillNames, overwriteConflicts, sourceUrl: sourceUrl ?? null }),
   checkRepoUpdates: (configId?: string) =>
     invoke<GitRepoUpdateInfo[]>('check_git_repo_updates', { configId: configId ?? null }),
+  scanRemoteNewSkills: (configId: string) =>
+    invoke<ScanRemoteResultData>('scan_remote_new_skills', { configId }),
 }
 
 // ── skills.sh ──

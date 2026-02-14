@@ -1204,3 +1204,70 @@ pub async fn apply_merge_result(
     info!("[apply_merge_result] 完成: 写入 {} 个文件到 {}", resolutions.len(), target_path);
     Ok(())
 }
+
+// ── open_in_editor ──
+
+#[tauri::command]
+pub async fn open_in_editor(
+    path: String,
+    editor: Option<String>,
+) -> Result<(), AppError> {
+    info!("[open_in_editor] path={}, editor={:?}", path, editor);
+
+    let target = Path::new(&path);
+    if !target.exists() {
+        return Err(AppError::NotFound(format!("路径不存在: {}", path)));
+    }
+
+    let editor_cmd = editor.unwrap_or_else(|| "code".to_string());
+
+    let cmd = match editor_cmd.as_str() {
+        "cursor" => "cursor",
+        "windsurf" => "windsurf",
+        "code" | "vscode" => "code",
+        "zed" => "zed",
+        "sublime" => "subl",
+        "vim" | "nvim" => "nvim",
+        other => other,
+    };
+
+    info!("[open_in_editor] 执行: {} {}", cmd, path);
+
+    let result = std::process::Command::new(cmd)
+        .arg(&path)
+        .spawn();
+
+    match result {
+        Ok(_) => {
+            info!("[open_in_editor] 成功打开: {} {}", cmd, path);
+            Ok(())
+        }
+        Err(e) => {
+            info!("[open_in_editor] 打开失败: {} — {}", cmd, e);
+            // 回退到系统默认打开
+            info!("[open_in_editor] 尝试系统默认打开...");
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open")
+                    .arg(&path)
+                    .spawn()
+                    .map_err(|e2| AppError::Internal(format!("打开失败: {}", e2)))?;
+            }
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("explorer")
+                    .arg(&path)
+                    .spawn()
+                    .map_err(|e2| AppError::Internal(format!("打开失败: {}", e2)))?;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                std::process::Command::new("xdg-open")
+                    .arg(&path)
+                    .spawn()
+                    .map_err(|e2| AppError::Internal(format!("打开失败: {}", e2)))?;
+            }
+            Ok(())
+        }
+    }
+}

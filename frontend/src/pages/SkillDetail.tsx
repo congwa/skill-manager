@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   ArrowLeft, Edit, RefreshCw, MoreHorizontal, Eye,
-  Trash2, Download, Upload, Clock, FileText, MapPin,
+  Trash2, Download, Upload, Clock, FileText, MapPin, ExternalLink,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -136,6 +136,13 @@ export default function SkillDetail() {
               <Button variant="ghost" size="icon" className="h-9 w-9"><MoreHorizontal className="h-4 w-4" /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
+              <DropdownMenuItem onClick={() => {
+                if (skill?.local_path) {
+                  skillsApi.openInEditor(skill.local_path).catch((e) => toast.error('打开失败: ' + String(e)))
+                } else {
+                  toast.error('无本地路径')
+                }
+              }}><ExternalLink className="h-4 w-4 mr-2" /> 在编辑器中打开</DropdownMenuItem>
               <DropdownMenuItem><Download className="h-4 w-4 mr-2" /> 检查更新</DropdownMenuItem>
               <DropdownMenuItem><Clock className="h-4 w-4 mr-2" /> 版本回滚</DropdownMenuItem>
               <DropdownMenuItem className="text-strawberry-500" onClick={() => setDeleteDialogOpen(true)}><Trash2 className="h-4 w-4 mr-2" /> 批量删除</DropdownMenuItem>

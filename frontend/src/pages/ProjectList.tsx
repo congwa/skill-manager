@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   FolderOpen, Sparkles, BellRing, AlertTriangle, Plus,
-  Search, MoreHorizontal, RefreshCw, Trash2, LayoutGrid, List,
+  Search, MoreHorizontal, RefreshCw, Trash2, LayoutGrid, List, Upload, Loader2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,6 +28,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { cn, toolColors, toolNames, relativeTime } from '@/lib/utils'
+import { projectsApi } from '@/lib/tauri-api'
+import { toast } from 'sonner'
 import type { ToolName } from '@/types'
 
 const statLabels: Record<string, { bg: string; text: string; label: string }> = {
@@ -70,23 +72,71 @@ export default function ProjectList() {
     await useProjectStore.getState().scanProject(projectId)
   }
 
+  const [isDragging, setIsDragging] = useState(false)
+
   const handleAddScan = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
-      const selected = await open({ directory: true, multiple: false, title: '选择项目目录' })
+      const selected = await open({ directory: true, multiple: true, title: '选择项目目录（可多选）' })
       if (selected) {
-        setScanning(true); setScanProgress(30)
-        await useProjectStore.getState().addProjectByPath(selected as string)
-        setScanProgress(70)
-        await useProjectStore.getState().scanProject(useProjectStore.getState().projects[useProjectStore.getState().projects.length - 1]?.id || '')
-        setScanProgress(100)
+        const paths = Array.isArray(selected) ? selected : [selected]
+        setScanning(true); setScanProgress(20)
+        if (paths.length === 1) {
+          await useProjectStore.getState().addProjectByPath(paths[0])
+          setScanProgress(60)
+          const lastProject = useProjectStore.getState().projects[useProjectStore.getState().projects.length - 1]
+          if (lastProject) await useProjectStore.getState().scanProject(lastProject.id)
+          setScanProgress(100)
+          toast.success(`项目 ${paths[0].split('/').pop()} 添加成功`)
+        } else {
+          setScanProgress(40)
+          const result = await projectsApi.batchAdd(paths)
+          setScanProgress(70)
+          await useProjectStore.getState().fetchProjects()
+          setScanProgress(100)
+          if (result.skipped.length > 0) {
+            toast.warning(`添加 ${result.added.length} 个，跳过 ${result.skipped.length} 个`)
+          } else {
+            toast.success(`成功添加 ${result.added.length} 个项目`)
+          }
+        }
         setScanning(false); setAddOpen(false)
       }
     } catch (e) {
       console.error('add project error:', e)
+      toast.error('添加项目失败: ' + String(e))
       setScanning(false)
     }
   }
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const items = Array.from(e.dataTransfer.items)
+    const paths: string[] = []
+    for (const item of items) {
+      const entry = item.webkitGetAsEntry?.()
+      if (entry?.isDirectory) {
+        paths.push(entry.fullPath || entry.name)
+      }
+    }
+    if (paths.length === 0) {
+      // Tauri 环境下可能无法通过 webkitGetAsEntry 获取路径，改用对话框
+      toast.info('请使用上方按钮选择目录')
+      return
+    }
+    setScanning(true); setScanProgress(30)
+    try {
+      const result = await projectsApi.batchAdd(paths)
+      await useProjectStore.getState().fetchProjects()
+      setScanProgress(100)
+      toast.success(`添加 ${result.added.length} 个项目`)
+    } catch (err) {
+      toast.error('批量添加失败: ' + String(err))
+    } finally {
+      setScanning(false); setAddOpen(false)
+    }
+  }, [])
 
   const statCards = [
     { label: '项目总数', value: projects.length, icon: FolderOpen, bg: 'bg-peach-50', color: 'text-peach-600' },
@@ -250,15 +300,33 @@ export default function ProjectList() {
           <DialogHeader><DialogTitle>添加项目</DialogTitle></DialogHeader>
           {!scanning ? (
             <div className="space-y-4">
-              <div className="border-2 border-dashed border-cream-300 rounded-xl p-10 text-center cursor-pointer hover:border-peach-300 hover:bg-peach-50/50 transition-all"
-                onClick={handleAddScan}>
-                <FolderOpen className="h-10 w-10 text-cream-400 mx-auto mb-3" />
-                <p className="text-cream-600 text-sm">拖拽文件夹或点击选择</p>
+              <div
+                className={cn(
+                  'border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all',
+                  isDragging ? 'border-peach-500 bg-peach-50' : 'border-cream-300 hover:border-peach-300 hover:bg-peach-50/50'
+                )}
+                onClick={handleAddScan}
+                onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={handleDrop}
+              >
+                {isDragging ? (
+                  <>
+                    <Upload className="h-10 w-10 text-peach-500 mx-auto mb-3" />
+                    <p className="text-peach-600 text-sm font-medium">松开即可添加</p>
+                  </>
+                ) : (
+                  <>
+                    <FolderOpen className="h-10 w-10 text-cream-400 mx-auto mb-3" />
+                    <p className="text-cream-600 text-sm">拖拽文件夹或点击选择（支持多选）</p>
+                  </>
+                )}
               </div>
             </div>
           ) : (
             <div className="space-y-4 py-4">
-              <p className="text-sm text-cream-600 text-center">正在扫描项目 Skill...</p>
+              <Loader2 className="h-6 w-6 text-peach-400 animate-spin mx-auto" />
+              <p className="text-sm text-cream-600 text-center">正在添加项目...</p>
               <Progress value={scanProgress} className="h-2" />
             </div>
           )}

@@ -58,16 +58,15 @@
 | ~~14~~ | ~~3.5.7~~ | ~~批量删除处理~~ ✅ 已实现 | 后端: batch_delete_skill 删除所有部署磁盘文件+数据库记录，可选删除本地库（含详细 log）；前端: SkillDetail 批量删除对话框支持"从所有部署删除"和"完全删除（含本地库）" |
 | ~~15~~ | ~~3.6.2~~ | ~~变更事件关联 Skill 信息~~ ✅ 已实现 | 后端: get_change_events JOIN deployments+skills+projects 返回 skill_name/project_name/tool/deploy_path（含 log）；前端: ChangeEventRow 新增字段，mapChangeEventRow 映射真实 Skill 信息 |
 | ~~16~~ | ~~3.5.9~~ | ~~导出前一致性检查~~ ✅ 已实现 | 后端: export_skills_to_git 导出前 JOIN 查询 diverged/missing 部署并记录详细 log，结果含 diverged_count/diverged_skills；前端: 导出完成后根据偏离状态展示 warning/success toast |
-| 17 | 3.4.2 | 远程新增 Skill 自动导入 | 导出时执行 git pull，但不扫描远程新增的 Skill |
+| ~~17~~ | ~~3.4.2~~ | ~~远程新增 Skill 自动导入~~ ✅ 已实现 | 后端: scan_remote_new_skills 浅克隆远程仓库扫描 skills/ 目录对比本地 DB 找出新增（含详细 log）；前端: SyncCenter 新增"扫描远程新增"按钮 + remote-new Tab 展示新增 Skill 并可逐个导入 |
 
 ### 🟢 低优先级 — Phase 3/4 功能
 
 | # | PRD 章节 | 缺失功能 |
 |---|----------|----------|
-| 18 | 3.2.3 | 打开外部编辑器（open_in_editor 命令） |
-| 19 | 3.1.1 | 批量导入多个项目 |
-| 20 | 3.1.1 | 拖拽项目目录快速导入（前端功能） |
-| 21 | Phase 3 | 遗留规则格式导入转换（Cursor .mdc、Trae rules → SKILL.md） |
+| ~~18~~ | ~~3.2.3~~ | ~~打开外部编辑器~~ ✅ 已实现 | 后端: open_in_editor 支持 cursor/windsurf/code/zed/sublime 等编辑器 CLI，失败回退系统默认打开（含 log）；前端: SkillDetail 下拉菜单"在编辑器中打开" |
+| ~~19~~ | ~~3.1.1~~ | ~~批量导入多个项目~~ ✅ 已实现 | 后端: batch_add_projects 批量添加项目路径（跳过无效/已存在，含详细 log）；前端: 文件选择对话框支持多选 |
+| ~~20~~ | ~~3.1.1~~ | ~~拖拽项目目录快速导入~~ ✅ 已实现 | 前端: ProjectList 添加项目弹窗支持拖拽区域（drag & drop）+ 拖拽视觉反馈 |
 | 22 | 3.5.7 场景五 | Cursor 跨工具兼容扫描的特殊处理 |
 | 23 | 3.5.7 场景六 | SKILL.md 相同但支撑文件不同时的逐文件 Diff |
 | 24 | Phase 4 | Skill 编辑器（内置 Markdown 编辑 + 预览） |

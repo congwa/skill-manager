@@ -21,8 +21,8 @@ import { useSyncStore } from '@/stores/useSyncStore'
 import { cn, relativeTime, toolNames } from '@/lib/utils'
 import { toast } from 'sonner'
 import { deploymentsApi, settingsApi, gitApi, skillsApi } from '@/lib/tauri-api'
-import { Upload, Eye, GitMerge } from 'lucide-react'
-import type { ConsistencyDetailData, SkillDiffResult, MergeResultData, GitRepoUpdateInfo } from '@/lib/tauri-api'
+import { Upload, Eye, GitMerge, FolderSearch, Download, Loader2 } from 'lucide-react'
+import type { ConsistencyDetailData, SkillDiffResult, MergeResultData, GitRepoUpdateInfo, ScanRemoteResultData } from '@/lib/tauri-api'
 import { useSkillStore } from '@/stores/useSkillStore'
 import DiffViewer from '@/components/DiffViewer'
 import MergeEditor from '@/components/MergeEditor'
@@ -49,6 +49,9 @@ export default function SyncCenter() {
   const [mergeTargetPath, setMergeTargetPath] = useState('')
   const [gitUpdates, setGitUpdates] = useState<GitRepoUpdateInfo[]>([])
   const [checkingGit, setCheckingGit] = useState(false)
+  const [scanResult, setScanResult] = useState<ScanRemoteResultData | null>(null)
+  const [scanning, setScanning] = useState(false)
+  const [importingSkills, setImportingSkills] = useState<Set<string>>(new Set())
   const skills = useSkillStore((s) => s.skills)
   const pendingCount = changeEvents.filter((e) => e.status === 'pending').length
 
@@ -110,6 +113,47 @@ export default function SyncCenter() {
       toast.error('检查 Git 更新失败: ' + String(e))
     } finally {
       setCheckingGit(false)
+    }
+  }
+
+  const handleScanRemote = async () => {
+    setScanning(true)
+    setScanResult(null)
+    try {
+      const configs = await settingsApi.getGitConfigs()
+      if (configs.length === 0) { toast.error('请先配置 Git 仓库'); setScanning(false); return }
+      console.log('[SyncCenter] 扫描远程新增 Skill...')
+      const result = await gitApi.scanRemoteNewSkills(configs[0].id)
+      setScanResult(result)
+      setActiveTab('remote-new')
+      if (result.new_skills.length > 0) {
+        toast.info(`发现 ${result.new_skills.length} 个远程新增 Skill`)
+      } else {
+        toast.success('远程仓库无新增 Skill')
+      }
+    } catch (e) {
+      console.error('[SyncCenter] 扫描远程失败:', e)
+      toast.error('扫描远程仓库失败: ' + String(e))
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  const handleImportRemoteSkill = async (skillName: string) => {
+    if (!scanResult) return
+    setImportingSkills((prev) => new Set(prev).add(skillName))
+    try {
+      const result = await gitApi.importFromRepo(scanResult.clone_path, [skillName], false, scanResult.remote_url)
+      await useSkillStore.getState().fetchSkills()
+      toast.success(`${skillName} 导入成功: ${result.message}`)
+      setScanResult((prev) => prev ? {
+        ...prev,
+        new_skills: prev.new_skills.filter((s) => s.name !== skillName),
+      } : null)
+    } catch (e) {
+      toast.error(`导入 ${skillName} 失败: ` + String(e))
+    } finally {
+      setImportingSkills((prev) => { const next = new Set(prev); next.delete(skillName); return next })
     }
   }
 
@@ -264,6 +308,9 @@ export default function SyncCenter() {
         <Button variant="outline" className="rounded-xl" onClick={handleCheckGitUpdates} disabled={checkingGit}>
           <GitBranch className="h-4 w-4 mr-1" /> {checkingGit ? '检查中...' : '检查 Git 更新'}
         </Button>
+        <Button variant="outline" className="rounded-xl" onClick={handleScanRemote} disabled={scanning}>
+          <FolderSearch className="h-4 w-4 mr-1" /> {scanning ? '扫描中...' : '扫描远程新增'}
+        </Button>
       </div>
 
       {/* Tab 区 */}
@@ -272,6 +319,7 @@ export default function SyncCenter() {
           <TabsTrigger value="events">变更事件 ({pendingCount})</TabsTrigger>
           <TabsTrigger value="report">一致性报告</TabsTrigger>
           <TabsTrigger value="git-updates">Git 更新{gitUpdates.some((r) => r.has_updates) ? ' ❗' : ''}</TabsTrigger>
+          <TabsTrigger value="remote-new">远程新增{scanResult && scanResult.new_skills.length > 0 ? ` (${scanResult.new_skills.length})` : ''}</TabsTrigger>
           <TabsTrigger value="history">操作历史</TabsTrigger>
         </TabsList>
 
@@ -475,6 +523,69 @@ export default function SyncCenter() {
                 </CardContent>
               </Card>
             ))
+          )}
+        </TabsContent>
+
+        {/* 远程新增 Skill */}
+        <TabsContent value="remote-new" className="space-y-4">
+          {scanning && (
+            <div className="text-center py-12">
+              <Loader2 className="h-8 w-8 text-peach-400 animate-spin mx-auto" />
+              <p className="text-sm text-cream-500 mt-3">正在扫描远程仓库...</p>
+            </div>
+          )}
+          {!scanning && !scanResult && (
+            <div className="text-center py-16">
+              <div className="text-5xl mb-4">📡</div>
+              <h2 className="text-lg font-display font-bold text-cream-700 mb-2">扫描远程新增 Skill</h2>
+              <p className="text-cream-500">点击上方"扫描远程新增"按钮检查远程 Git 仓库中的新 Skill</p>
+            </div>
+          )}
+          {!scanning && scanResult && scanResult.new_skills.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-5xl mb-4">✅</div>
+              <h2 className="text-lg font-display font-bold text-cream-700 mb-2">远程仓库无新增 Skill</h2>
+              <p className="text-cream-500">远程 {scanResult.total_remote} 个 / 本地 {scanResult.total_local} 个，完全同步</p>
+            </div>
+          )}
+          {!scanning && scanResult && scanResult.new_skills.length > 0 && (
+            <div>
+              <p className="text-sm text-cream-500 mb-4">
+                远程仓库 ({scanResult.remote_url}) 发现 {scanResult.new_skills.length} 个本地没有的 Skill
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                {scanResult.new_skills.map((skill) => (
+                  <Card key={skill.name} className="border border-cream-200 shadow-card">
+                    <CardContent className="p-4 space-y-2">
+                      <div className="flex items-start justify-between">
+                        <div className="min-w-0 flex-1">
+                          <h3 className="font-semibold text-cream-800 text-sm truncate">{skill.name}</h3>
+                          {skill.description && (
+                            <p className="text-xs text-cream-500 mt-0.5 line-clamp-2">{skill.description}</p>
+                          )}
+                        </div>
+                        <Badge variant="outline" className="bg-mint-50 text-mint-500 text-[10px] shrink-0 ml-2">新增</Badge>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        {skill.version && <span className="text-xs text-cream-400">v{skill.version}</span>}
+                        <Button
+                          size="sm"
+                          className="text-xs h-7 bg-peach-500 hover:bg-peach-600 text-white ml-auto"
+                          onClick={() => handleImportRemoteSkill(skill.name)}
+                          disabled={importingSkills.has(skill.name)}
+                        >
+                          {importingSkills.has(skill.name)
+                            ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                            : <Download className="h-3 w-3 mr-1" />
+                          }
+                          导入
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
           )}
         </TabsContent>
 
