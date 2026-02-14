@@ -46,11 +46,32 @@ export default function Settings() {
   const [authType, setAuthType] = useState('ssh')
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<'success' | 'fail' | null>(null)
-  const [clearOpen, setClearOpen] = useState(false)
+  const [factoryResetOpen, setFactoryResetOpen] = useState(false)
+  const [factoryResetFinalOpen, setFactoryResetFinalOpen] = useState(false)
+  const [factoryResetConfirmText, setFactoryResetConfirmText] = useState('')
+  const [factoryResetLoading, setFactoryResetLoading] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [savedField, setSavedField] = useState<string | null>(null)
   const [githubToken, setGithubToken] = useState('')
   const [tokenSaving, setTokenSaving] = useState(false)
+
+  const handleFactoryReset = async () => {
+    setFactoryResetLoading(true)
+    try {
+      await settingsApi.resetApp()
+      toast.success('所有数据已清空，应用即将重启')
+      setFactoryResetFinalOpen(false)
+      setFactoryResetConfirmText('')
+      setTimeout(() => {
+        window.location.reload()
+      }, 800)
+    } catch (e) {
+      console.error('[Settings] 清空所有数据失败:', e)
+      toast.error('清空失败: ' + String(e))
+    } finally {
+      setFactoryResetLoading(false)
+    }
+  }
 
   const showSaved = (field: string) => {
     setSavedField(field)
@@ -400,7 +421,14 @@ export default function Settings() {
                   <span className="text-sm text-cream-500">天</span>
                 </div>
                 <div className="flex gap-3 pt-2">
-                  <Button variant="outline" size="sm" onClick={() => setClearOpen(true)}>立即清理</Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setFactoryResetOpen(true)}
+                    className="text-strawberry-500 border-strawberry-200"
+                  >
+                    清空所有数据并重启
+                  </Button>
                   <Button variant="outline" size="sm" onClick={() => toast.success('数据库已导出')}>导出数据库</Button>
                   <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} className="text-strawberry-500 border-strawberry-200">导入数据库</Button>
                 </div>
@@ -432,16 +460,60 @@ export default function Settings() {
         </motion.div>
       </div>
 
-      {/* 清理确认 */}
-      <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
+      {/* 恢复初始化确认（第一次） */}
+      <AlertDialog open={factoryResetOpen} onOpenChange={setFactoryResetOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>清理历史记录</AlertDialogTitle>
-            <AlertDialogDescription>将清理 23 条历史记录，确认？</AlertDialogDescription>
+            <AlertDialogTitle>确认清空所有数据？</AlertDialogTitle>
+            <AlertDialogDescription>
+              该操作会删除项目、Skill、部署、同步记录、Git 配置和全部设置，并将应用恢复到初始化状态。
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { setClearOpen(false); toast.success('已清理 23 条历史记录') }}>确认清理</AlertDialogAction>
+            <AlertDialogAction
+              onClick={() => {
+                setFactoryResetOpen(false)
+                setFactoryResetFinalOpen(true)
+              }}
+              className="bg-strawberry-500 hover:bg-strawberry-400"
+            >
+              继续
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 恢复初始化确认（第二次） */}
+      <AlertDialog open={factoryResetFinalOpen} onOpenChange={setFactoryResetFinalOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>二次确认：输入 RESET</AlertDialogTitle>
+            <AlertDialogDescription>
+              这是不可撤销操作。请输入 <span className="font-semibold text-cream-800">RESET</span> 以确认清空所有数据并立即重启应用。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <Input
+            value={factoryResetConfirmText}
+            onChange={(e) => setFactoryResetConfirmText(e.target.value)}
+            placeholder="请输入 RESET"
+            autoFocus
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                setFactoryResetConfirmText('')
+              }}
+            >
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleFactoryReset}
+              disabled={factoryResetConfirmText !== 'RESET' || factoryResetLoading}
+              className="bg-strawberry-500 hover:bg-strawberry-400"
+            >
+              {factoryResetLoading ? '执行中...' : '确认清空并重启'}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
