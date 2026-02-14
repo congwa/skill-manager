@@ -38,7 +38,9 @@ export default function SkillsShSearch() {
 
   useEffect(() => {
     skillsShApi.getCategories().then(setCategories).catch(() => {})
-  }, [])
+    // 默认加载热门分类
+    handleBrowseCategory('popular')
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleBrowseCategory = async (catId: string) => {
     setActiveCategory(catId)
