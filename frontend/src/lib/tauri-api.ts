@@ -453,6 +453,8 @@ export interface GitExportResult {
   commit_hash: string | null
   pushed: boolean
   message: string
+  diverged_count: number
+  diverged_skills: string[]
 }
 
 export interface GitRepoSkill {

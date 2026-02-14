@@ -531,7 +531,12 @@ export default function SyncCenter() {
                 if (configs.length === 0) { toast.error('请先配置 Git 仓库'); return }
                 toast.loading('正在导出到 Git...')
                 const result = await gitApi.exportToGit(configs[0].id)
-                toast.success(result.message)
+                toast.dismiss()
+                if (result.diverged_count > 0) {
+                  toast.warning(result.message)
+                } else {
+                  toast.success(result.message)
+                }
               } catch (e) {
                 console.error('[SyncCenter] 导出失败:', e)
                 toast.error('导出失败: ' + String(e))

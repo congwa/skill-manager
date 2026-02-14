@@ -24,6 +24,8 @@ pub struct GitExportResult {
     pub commit_hash: Option<String>,
     pub pushed: bool,
     pub message: String,
+    pub diverged_count: usize,
+    pub diverged_skills: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -242,6 +244,43 @@ pub async fn export_skills_to_git(
     std::fs::create_dir_all(&export_skills_dir)
         .map_err(|e| AppError::Internal(format!("创建 skills 目录失败: {}", e)))?;
 
+    // ── 导出前一致性检查 ──
+    info!("[export_skills_to_git] 执行导出前一致性检查...");
+    let mut div_stmt = conn.prepare(
+        "SELECT s.name, d.tool, d.path, d.status
+         FROM skill_deployments d
+         JOIN skills s ON s.id = d.skill_id
+         WHERE d.status IN ('diverged', 'missing')
+         ORDER BY s.name"
+    )?;
+    let diverged_list: Vec<(String, String, String, String)> = div_stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?, row.get::<_, String>(3)?))
+    })?.collect::<Result<Vec<_>, _>>()?;
+
+    let diverged_skill_names: Vec<String> = diverged_list.iter()
+        .map(|(name, _, _, _)| name.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let diverged_count = diverged_list.len();
+
+    if diverged_count > 0 {
+        info!(
+            "[export_skills_to_git] ⚠️ 发现 {} 个偏离/缺失部署（涉及 {} 个 Skill）:",
+            diverged_count, diverged_skill_names.len()
+        );
+        for (name, tool, path, status) in &diverged_list {
+            info!(
+                "[export_skills_to_git]   {} | tool={} | status={} | path={}",
+                name, tool, status, path
+            );
+        }
+        info!("[export_skills_to_git] 继续导出（以本地库为准）...");
+    } else {
+        info!("[export_skills_to_git] ✅ 所有部署状态正常，无偏离");
+    }
+
     // 查询所有 Skill 并复制
     let mut stmt = conn.prepare(
         "SELECT id, name, description, version, local_path FROM skills ORDER BY name",
@@ -346,11 +385,22 @@ pub async fn export_skills_to_git(
         exported
     );
 
+    let msg = if diverged_count > 0 {
+        format!(
+            "成功导出 {} 个 Skill 到 {}（⚠️ {} 个部署存在偏离/缺失，涉及: {}）",
+            exported, remote_url, diverged_count, diverged_skill_names.join(", ")
+        )
+    } else {
+        format!("成功导出 {} 个 Skill 到 {}", exported, remote_url)
+    };
+
     Ok(GitExportResult {
         skills_exported: exported,
         commit_hash,
         pushed: true,
-        message: format!("成功导出 {} 个 Skill 到 {}", exported, remote_url),
+        message: msg,
+        diverged_count,
+        diverged_skills: diverged_skill_names,
     })
 }
 
