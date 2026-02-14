@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ChevronDown, Plus, Minus, FileText, FilePlus, FileMinus, FileEdit } from 'lucide-react'
+import { ChevronDown, Plus, Minus, FileText, FilePlus, FileMinus, FileEdit, Info } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -83,8 +83,36 @@ function DiffFileCard({ file }: { file: FileDiffItem }) {
 export default function DiffViewer({ diff }: DiffViewerProps) {
   const { summary, files } = diff
 
+  const skillMdStatus = useMemo(() => {
+    const skillMd = files.find((f) => f.path === 'SKILL.md' || f.path.endsWith('/SKILL.md'))
+    if (!skillMd) return 'missing'
+    return skillMd.status // 'modified' | 'added' | 'removed' | 'unchanged'
+  }, [files])
+
+  const hasOnlySupportingChanges = skillMdStatus === 'unchanged' && (summary.added + summary.removed + summary.modified) > 0
+
   return (
     <div className="space-y-3">
+      {/* 智能提示 */}
+      {hasOnlySupportingChanges && (
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-sky-50 border border-sky-200 text-sm">
+          <Info className="h-4 w-4 text-sky-500 mt-0.5 shrink-0" />
+          <div>
+            <p className="font-medium text-sky-700">主指令文件 SKILL.md 无变化</p>
+            <p className="text-sky-600 text-xs mt-0.5">差异仅在支撑文件（脚本、参考文档、资源等），Skill 核心行为未改变</p>
+          </div>
+        </div>
+      )}
+      {skillMdStatus === 'modified' && (
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-honey-50 border border-honey-200 text-sm">
+          <Info className="h-4 w-4 text-honey-500 mt-0.5 shrink-0" />
+          <div>
+            <p className="font-medium text-honey-700">主指令文件 SKILL.md 已修改</p>
+            <p className="text-honey-600 text-xs mt-0.5">Skill 核心行为可能已改变，建议仔细检查差异</p>
+          </div>
+        </div>
+      )}
+
       {/* Summary */}
       <div className="flex gap-3 text-sm">
         {summary.added > 0 && <Badge variant="outline" className="bg-mint-50 text-mint-500"><Plus className="h-3 w-3 mr-1" />{summary.added} 新增</Badge>}
