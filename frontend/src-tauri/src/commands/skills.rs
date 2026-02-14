@@ -692,7 +692,7 @@ pub async fn restore_from_backup(
         let conn = pool.get()?;
         conn.execute(
             "INSERT INTO sync_history (id, skill_id, action, status, created_at)
-             VALUES (?1, ?2, 'restore', 'success', datetime('now'))",
+             VALUES (?1, ?2, 'import', 'success', datetime('now'))",
             params![Uuid::new_v4().to_string(), skill_id],
         )?;
     }

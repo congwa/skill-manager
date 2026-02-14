@@ -971,7 +971,7 @@ pub async fn update_library_from_deployment(
         let conn = pool.get()?;
         conn.execute(
             "INSERT INTO sync_history (id, skill_id, deployment_id, action, from_checksum, to_checksum, status, created_at)
-             VALUES (?1, ?2, ?3, 'lib_update', ?4, ?5, 'success', datetime('now'))",
+             VALUES (?1, ?2, ?3, 'update', ?4, ?5, 'success', datetime('now'))",
             params![Uuid::new_v4().to_string(), skill_id, deployment_id, old_checksum, new_checksum],
         )?;
     }

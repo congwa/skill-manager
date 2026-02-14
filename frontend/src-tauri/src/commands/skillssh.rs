@@ -496,7 +496,7 @@ pub async fn install_from_skills_sh(
         let conn = pool.get()?;
         conn.execute(
             "INSERT INTO sync_history (id, skill_id, action, status, created_at)
-             VALUES (?1, ?2, 'install', 'success', datetime('now'))",
+             VALUES (?1, ?2, 'import', 'success', datetime('now'))",
             params![Uuid::new_v4().to_string(), skill_id],
         )?;
     }
