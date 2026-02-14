@@ -50,9 +50,12 @@ export default function SkillExplorer() {
         .filter((s) => s.local_path)
         .map(async (skill) => {
           try {
-            const files = await skillsApi.listFiles(skill.local_path!)
-            map.set(skill.id, files)
-          } catch {
+            const relFiles = await skillsApi.listFiles(skill.local_path!)
+            const absFiles = relFiles.map((f) => `${skill.local_path}/${f}`)
+            console.log(`[SkillExplorer] ${skill.name}: ${relFiles.length} files`, relFiles.slice(0, 5))
+            map.set(skill.id, absFiles)
+          } catch (err) {
+            console.warn(`[SkillExplorer] Failed to list files for ${skill.name}:`, err)
             map.set(skill.id, [])
           }
         })
@@ -74,6 +77,7 @@ export default function SkillExplorer() {
     .filter((s) => s.local_path)
     .map((skill) => {
       const files = skillFilesMap.get(skill.id) || []
+      if (files.length === 0) console.log(`[SkillExplorer] ${skill.name}: no files in map`)
       // 构建文件/子目录结构
       const buildTree = (fileList: string[], basePath: string): TreeViewElement[] => {
         const dirs = new Map<string, string[]>()
