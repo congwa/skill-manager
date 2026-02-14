@@ -56,7 +56,6 @@
 - **全局目录**: `~/.cursor/skills/`
 - **Skill 结构**: 与 Windsurf 一致，每个 Skill 是一个文件夹，包含 `SKILL.md` 和可选资源文件
 - **兼容目录**: Cursor 同时扫描 `.claude/skills/` 和 `.codex/skills/`（跨工具兼容）
-- **遗留规则**: 仍支持 `.cursor/rules/`（`.mdc` 格式）、`AGENTS.md`、`.cursorrules`（遗留格式），但 Skill 已成为推荐方式
 - **特别说明**: Cursor 2.4+ 内置 `/migrate-to-skills` 命令，可将旧规则自动迁移为 Skill
 
 #### Claude Code
@@ -216,7 +215,7 @@ version: 1.0.0
 | Codex | `.agents/skills/` | 原生支持 |
 | Trae | `.trae/skills/` | 原生支持 |
 
-系统安装 Skill 时，只需将标准格式的 Skill 文件夹复制到对应工具目录即可，无需格式转换。对于部分工具的遗留规则格式（如 Cursor 的 `.mdc`、Trae 的 rules），系统提供可选的导入转换功能，将其转换为标准 `SKILL.md` 格式纳入统一管理。
+系统安装 Skill 时，只需将标准格式的 Skill 文件夹复制到对应工具目录即可，无需格式转换。
 
 ### 3.4 Git 仓库集成
 
@@ -1089,7 +1088,6 @@ interface GitExportConfig {
 - Git 仓库更新检测
 - 更新策略配置（全量/选择性）
 - 版本回滚功能
-- 遗留规则格式导入转换（Cursor .mdc、Trae rules 等）
 
 ### Phase 4: 高级功能
 
@@ -1111,7 +1109,6 @@ interface GitExportConfig {
 | **本地 Skill 库** | `~/.skills-manager/skills/` 目录，扮平化存储所有 Skill 的标准文件，配合 SQLite 数据库作为唯一真相源 |
 | **部署** | 将本地 Skill 库中的 Skill 文件拷贝到某个项目的某个工具目录下，同时在数据库中记录部署关系 |
 | **一致性检查** | 定期校验数据库部署记录与磁盘实际文件是否一致，自动发现偏差并提示用户修正 |
-| **遗留规则导入** | 将工具旧版规则格式（如 Cursor `.mdc`、Trae rules）转换为标准 `SKILL.md` 格式的过程 |
 | **全局 Skill** | 安装在工具全局目录中的 Skill，对所有项目生效 |
 | **项目级 Skill** | 安装在特定项目目录中的 Skill，仅对该项目生效 |
 
