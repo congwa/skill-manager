@@ -67,7 +67,6 @@
 | ~~18~~ | ~~3.2.3~~ | ~~打开外部编辑器~~ ✅ 已实现 | 后端: open_in_editor 支持 cursor/windsurf/code/zed/sublime 等编辑器 CLI，失败回退系统默认打开（含 log）；前端: SkillDetail 下拉菜单"在编辑器中打开" |
 | ~~19~~ | ~~3.1.1~~ | ~~批量导入多个项目~~ ✅ 已实现 | 后端: batch_add_projects 批量添加项目路径（跳过无效/已存在，含详细 log）；前端: 文件选择对话框支持多选 |
 | ~~20~~ | ~~3.1.1~~ | ~~拖拽项目目录快速导入~~ ✅ 已实现 | 前端: ProjectList 添加项目弹窗支持拖拽区域（drag & drop）+ 拖拽视觉反馈 |
-| 22 | 3.5.7 场景五 | Cursor 跨工具兼容扫描的特殊处理 |
 | 23 | 3.5.7 场景六 | SKILL.md 相同但支撑文件不同时的逐文件 Diff |
 | 24 | Phase 4 | Skill 编辑器（内置 Markdown 编辑 + 预览） |
 | 25 | Phase 4 | Skill 创建向导 |
