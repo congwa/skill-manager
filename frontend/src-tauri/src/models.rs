@@ -50,10 +50,15 @@ pub struct SkillSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillsShSearchResult {
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub skill_id: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub installs: u64,
+    #[serde(default)]
     pub source: String,
 }
 

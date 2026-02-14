@@ -849,8 +849,11 @@ pub async fn browse_popular_skills_sh(
             .map_err(|e| AppError::Internal(format!("HTTP 请求失败: {}", e)))?;
 
         if resp.status().is_success() {
-            let data: SkillsShApiResponse = resp.json().await
-                .map_err(|e| AppError::Internal(format!("解析响应失败: {}", e)))?;
+            let body = resp.text().await
+                .map_err(|e| AppError::Internal(format!("读取响应失败: {}", e)))?;
+            info!("[browse_popular_skills_sh] 响应体前200字符: {}", &body[..body.len().min(200)]);
+            let data: SkillsShApiResponse = serde_json::from_str(&body)
+                .map_err(|e| AppError::Internal(format!("解析响应失败: {} | body={}", e, &body[..body.len().min(300)])))?;
             for skill in data.skills.unwrap_or_default() {
                 if seen_ids.insert(skill.id.clone()) {
                     all_results.push(skill);
@@ -874,8 +877,14 @@ pub async fn browse_popular_skills_sh(
 
             match resp {
                 Ok(r) if r.status().is_success() => {
-                    let data: SkillsShApiResponse = r.json().await
-                        .map_err(|e| AppError::Internal(format!("解析响应失败: {}", e)))?;
+                    let body = r.text().await
+                        .map_err(|e| AppError::Internal(format!("读取响应失败: {}", e)))?;
+                    info!("[browse_popular_skills_sh]   keyword='{}' 响应前200字符: {}", keyword, &body[..body.len().min(200)]);
+                    let data: SkillsShApiResponse = serde_json::from_str(&body)
+                        .map_err(|e| {
+                            info!("[browse_popular_skills_sh]   keyword='{}' 解析失败: {}", keyword, e);
+                            AppError::Internal(format!("解析响应失败: {}", e))
+                        })?;
                     let skills = data.skills.unwrap_or_default();
                     info!("[browse_popular_skills_sh]   keyword='{}' 返回 {} 条", keyword, skills.len());
                     for skill in skills {
