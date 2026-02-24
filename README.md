@@ -1,6 +1,6 @@
 # Skills Manager
 
-> 一款跨平台 AI 编码工具 **Skill 统一管理器**，支持导入项目、发现并管理各工具的 Skill，连接 [skills.sh](https://skills.sh/) 在线仓库进行安装/更新，并提供一键备份同步至 GitHub / Gitee 远程仓库的能力。
+> 一款跨平台 AI 编码工具 **Skill 统一管理器**，支持 **40+ AI 编码工具**，导入项目、发现并管理各工具的 Skill，连接 [skills.sh](https://skills.sh/) 在线仓库进行安装/更新，并提供一键备份同步至 GitHub / Gitee 远程仓库的能力。
 
 ---
 
@@ -10,7 +10,7 @@
 
 ![项目列表](./screenshot/project.webp)
 
-> 导入本地项目后自动扫描，按工具（Cursor / Windsurf / Claude Code 等）分组展示已部署的 Skill，支持网格/列表视图切换。
+> 导入本地项目后自动扫描，按工具（40+ AI 编码工具）分组展示已部署的 Skill，支持网格/列表视图切换。
 
 ![项目详情](./screenshot/project_detail.webp)
 
@@ -58,7 +58,7 @@
 | **Skill 库** | 本地统一存储，查看、编辑、版本对比、更新检查 |
 | **Skill 商店** | 连接 skills.sh 在线仓库，搜索安装社区 Skill |
 | **Git 导入** | Clone GitHub / Gitee 仓库，批量导入 Skill |
-| **多工具支持** | Cursor · Windsurf · Claude Code · OpenAI Codex · Trae |
+| **多工具支持** | Amp · Antigravity · Augment · Claude Code · Cline · CodeBuddy · Codex · Command Code · Continue · Cortex Code · Crush · Cursor · Droid · Gemini CLI · GitHub Copilot · Goose · iFlow CLI · Junie · Kilo Code · Kimi Code CLI · Kiro CLI · Kode · MCPJam · Mistral Vibe · Mux · OpenClaw · OpenCode · OpenHands · Pi · Qoder · Qwen Code · Replit · Roo Code · Trae · Trae CN · Universal · Windsurf · Zencoder · Neovate · Pochi · AdaL |
 | **部署管理** | 将 Skill 从统一库部署到指定项目的对应工具目录 |
 | **同步推送** | 将本地变更推送到 GitHub / Gitee 备份仓库 |
 | **数据管理** | 本地 SQLite 数据库，支持导出/导入/一键恢复出厂 |
@@ -116,11 +116,47 @@
 
 | 工具 | 项目级路径 | 全局路径 |
 |---|---|---|
-| **Cursor** | `{project}/.cursor/skills/` | `~/.cursor/skills/` |
-| **Windsurf** | `{project}/.windsurf/skills/` | `~/.windsurf/skills/` |
+| **Amp** | `{project}/.agents/skills/` | `~/.config/agents/skills/` |
+| **Antigravity** | `{project}/.agent/skills/` | `~/.gemini/antigravity/skills/` |
+| **Augment** | `{project}/.augment/skills/` | `~/.augment/skills/` |
 | **Claude Code** | `{project}/.claude/skills/` | `~/.claude/skills/` |
-| **OpenAI Codex** | `{project}/.codex/skills/` | `~/.codex/skills/` |
+| **Cline** | `{project}/.cline/skills/` | `~/.cline/skills/` |
+| **CodeBuddy** | `{project}/.codebuddy/skills/` | `~/.codebuddy/skills/` |
+| **Codex** | `{project}/.agents/skills/` | `~/.codex/skills/` |
+| **Command Code** | `{project}/.commandcode/skills/` | `~/.commandcode/skills/` |
+| **Continue** | `{project}/.continue/skills/` | `~/.continue/skills/` |
+| **Cortex Code** | `{project}/.cortex/skills/` | `~/.snowflake/cortex/skills/` |
+| **Crush** | `{project}/.crush/skills/` | `~/.config/crush/skills/` |
+| **Cursor** | `{project}/.agents/skills/` | `~/.cursor/skills/` |
+| **Droid** | `{project}/.factory/skills/` | `~/.factory/skills/` |
+| **Gemini CLI** | `{project}/.agents/skills/` | `~/.gemini/skills/` |
+| **GitHub Copilot** | `{project}/.agents/skills/` | `~/.copilot/skills/` |
+| **Goose** | `{project}/.goose/skills/` | `~/.config/goose/skills/` |
+| **iFlow CLI** | `{project}/.iflow/skills/` | `~/.iflow/skills/` |
+| **Junie** | `{project}/.junie/skills/` | `~/.junie/skills/` |
+| **Kilo Code** | `{project}/.kilocode/skills/` | `~/.kilocode/skills/` |
+| **Kimi Code CLI** | `{project}/.agents/skills/` | `~/.config/agents/skills/` |
+| **Kiro CLI** | `{project}/.kiro/skills/` | `~/.kiro/skills/` |
+| **Kode** | `{project}/.kode/skills/` | `~/.kode/skills/` |
+| **MCPJam** | `{project}/.mcpjam/skills/` | `~/.mcpjam/skills/` |
+| **Mistral Vibe** | `{project}/.vibe/skills/` | `~/.vibe/skills/` |
+| **Mux** | `{project}/.mux/skills/` | `~/.mux/skills/` |
+| **OpenClaw** | `{project}/skills/` | `~/.openclaw/skills/` |
+| **OpenCode** | `{project}/.agents/skills/` | `~/.config/opencode/skills/` |
+| **OpenHands** | `{project}/.openhands/skills/` | `~/.openhands/skills/` |
+| **Pi** | `{project}/.pi/skills/` | `~/.pi/agent/skills/` |
+| **Qoder** | `{project}/.qoder/skills/` | `~/.qoder/skills/` |
+| **Qwen Code** | `{project}/.qwen/skills/` | `~/.qwen/skills/` |
+| **Replit** | `{project}/.agents/skills/` | `~/.config/agents/skills/` |
+| **Roo Code** | `{project}/.roo/skills/` | `~/.roo/skills/` |
 | **Trae** | `{project}/.trae/skills/` | `~/.trae/skills/` |
+| **Trae CN** | `{project}/.trae/skills/` | `~/.trae-cn/skills/` |
+| **Universal** | `{project}/.agents/skills/` | `~/.config/agents/skills/` |
+| **Windsurf** | `{project}/.windsurf/skills/` | `~/.codeium/windsurf/skills/` |
+| **Zencoder** | `{project}/.zencoder/skills/` | `~/.zencoder/skills/` |
+| **Neovate** | `{project}/.neovate/skills/` | `~/.neovate/skills/` |
+| **Pochi** | `{project}/.pochi/skills/` | `~/.pochi/skills/` |
+| **AdaL** | `{project}/.adal/skills/` | `~/.adal/skills/` |
 
 ---
 
