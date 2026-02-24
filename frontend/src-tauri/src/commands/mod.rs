@@ -1,4 +1,5 @@
 pub mod projects;
+pub mod skill_files;
 pub mod skills;
 pub mod skillssh;
 pub mod deployments;

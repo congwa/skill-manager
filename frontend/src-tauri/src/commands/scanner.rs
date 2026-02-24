@@ -4,19 +4,13 @@ use std::path::{Path, PathBuf};
 use tauri::State;
 use uuid::Uuid;
 
+use super::skill_files::{compute_db_checksum, db_import_from_dir, has_db_files};
 use super::utils::compute_dir_checksum;
 
 use crate::db::DbPool;
 use crate::error::AppError;
 use crate::models::{ScanResult, ScannedSkill};
-
-const TOOL_DIRS: &[(&str, &str)] = &[
-    ("windsurf", ".windsurf/skills"),
-    ("cursor", ".cursor/skills"),
-    ("claude-code", ".claude/skills"),
-    ("codex", ".agents/skills"),
-    ("trae", ".trae/skills"),
-];
+use crate::tools::ALL_TOOLS;
 
 #[tauri::command]
 pub async fn scan_project(project_path: String) -> Result<ScanResult, AppError> {
@@ -34,7 +28,8 @@ pub async fn scan_project(project_path: String) -> Result<ScanResult, AppError> 
     let mut tools = Vec::new();
     let mut skills = Vec::new();
 
-    for (tool, dir) in TOOL_DIRS {
+    for t in ALL_TOOLS {
+        let (tool, dir) = (t.id, t.project_dir);
         let skill_dir = base.join(dir);
         if skill_dir.exists() && skill_dir.is_dir() {
             tools.push(tool.to_string());
@@ -102,20 +97,12 @@ pub async fn scan_and_import_project(
     for skill in &scan_result.skills {
         let skill_id = Uuid::new_v4().to_string();
 
-        let home = dirs::home_dir().expect("Cannot find home directory");
-        let local_path = home
-            .join(".skills-manager")
-            .join("skills")
-            .join(&skill.name)
-            .to_string_lossy()
-            .to_string();
-
         let checksum = compute_dir_checksum(Path::new(&skill.path));
 
         tx.execute(
-            "INSERT OR IGNORE INTO skills (id, name, description, version, checksum, local_path, last_modified)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
-            params![skill_id, skill.name, skill.description, skill.version, checksum, local_path],
+            "INSERT OR IGNORE INTO skills (id, name, description, version, checksum, last_modified)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
+            params![skill_id, skill.name, skill.description, skill.version, checksum],
         )?;
 
         let actual_skill_id: String = tx.query_row(
@@ -123,6 +110,25 @@ pub async fn scan_and_import_project(
             params![skill.name],
             |row| row.get(0),
         )?;
+
+        // 将扫描到的 Skill 文件导入到 DB skill_files 表（权威源）
+        let skill_src = Path::new(&skill.path);
+        if skill_src.exists() && !has_db_files(&tx, &actual_skill_id) {
+            match db_import_from_dir(&tx, &actual_skill_id, skill_src) {
+                Ok(n) => {
+                    info!("[scan_and_import] 已导入 '{}' 到 DB: {} 个文件", skill.name, n);
+                    // 从 DB 内容重新计算 checksum，保证一致性
+                    let db_cs = compute_db_checksum(&tx, &actual_skill_id);
+                    let _ = tx.execute(
+                        "UPDATE skills SET checksum = ?1 WHERE id = ?2",
+                        params![db_cs, actual_skill_id],
+                    );
+                }
+                Err(e) => {
+                    info!("[scan_and_import] 导入 '{}' 到 DB 失败: {}", skill.name, e);
+                }
+            }
+        }
 
         tx.execute(
             "INSERT OR IGNORE INTO skill_sources (id, skill_id, source_type)
@@ -151,13 +157,6 @@ pub async fn scan_and_import_project(
     Ok(scan_result)
 }
 
-const GLOBAL_TOOL_DIRS: &[(&str, &str)] = &[
-    ("windsurf", ".codeium/windsurf/skills"),
-    ("cursor", ".cursor/skills"),
-    ("claude-code", ".claude/skills"),
-    ("codex", ".agents/skills"),
-    ("trae", ".trae/skills"),
-];
 
 #[derive(serde::Serialize)]
 pub struct GlobalScanResult {
@@ -166,16 +165,15 @@ pub struct GlobalScanResult {
     pub deployments_created: usize,
 }
 
-#[tauri::command]
-pub async fn scan_global_skills(
-    pool: State<'_, DbPool>,
-) -> Result<GlobalScanResult, AppError> {
+/// 核心扫描逻辑，可被 Tauri command 和启动任务共同调用
+pub async fn scan_global_skills_internal(pool: &DbPool) -> Result<GlobalScanResult, AppError> {
     info!("[scan_global] 开始扫描全局工具目录...");
     let home = dirs::home_dir().expect("Cannot find home directory");
     let mut tools_found = Vec::new();
     let mut all_skills: Vec<(String, ScannedSkill)> = Vec::new();
 
-    for (tool, dir) in GLOBAL_TOOL_DIRS {
+    for t in ALL_TOOLS {
+        let (tool, dir) = (t.id, t.global_dir);
         let global_dir = home.join(dir);
         if global_dir.exists() && global_dir.is_dir() {
             tools_found.push(tool.to_string());
@@ -223,20 +221,13 @@ pub async fn scan_global_skills(
 
         for (_tool, skill) in &all_skills {
             let skill_id = Uuid::new_v4().to_string();
-            let lib_home = dirs::home_dir().expect("Cannot find home directory");
-            let local_path = lib_home
-                .join(".skills-manager")
-                .join("skills")
-                .join(&skill.name)
-                .to_string_lossy()
-                .to_string();
 
             let checksum = compute_dir_checksum(Path::new(&skill.path));
 
             let inserted = tx.execute(
-                "INSERT OR IGNORE INTO skills (id, name, description, version, checksum, local_path, last_modified)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
-                params![skill_id, skill.name, skill.description, skill.version, checksum, local_path],
+                "INSERT OR IGNORE INTO skills (id, name, description, version, checksum, last_modified)
+                 VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
+                params![skill_id, skill.name, skill.description, skill.version, checksum],
             )?;
 
             if inserted > 0 {
@@ -248,6 +239,24 @@ pub async fn scan_global_skills(
                 params![skill.name],
                 |row| row.get(0),
             )?;
+
+            // 将文件导入到 DB skill_files（仅当 DB 中还没有文件时）
+            let skill_src = Path::new(&skill.path);
+            if skill_src.exists() && !has_db_files(&tx, &actual_skill_id) {
+                match db_import_from_dir(&tx, &actual_skill_id, skill_src) {
+                    Ok(n) => {
+                        info!("[scan_global] 已导入 '{}' 到 DB: {} 个文件", skill.name, n);
+                        let db_cs = compute_db_checksum(&tx, &actual_skill_id);
+                        let _ = tx.execute(
+                            "UPDATE skills SET checksum = ?1 WHERE id = ?2",
+                            params![db_cs, actual_skill_id],
+                        );
+                    }
+                    Err(e) => {
+                        info!("[scan_global] 导入 '{}' 到 DB 失败: {}", skill.name, e);
+                    }
+                }
+            }
 
             tx.execute(
                 "INSERT OR IGNORE INTO skill_sources (id, skill_id, source_type)
@@ -285,6 +294,13 @@ pub async fn scan_global_skills(
         skills_imported,
         deployments_created,
     })
+}
+
+#[tauri::command]
+pub async fn scan_global_skills(
+    pool: State<'_, DbPool>,
+) -> Result<GlobalScanResult, AppError> {
+    scan_global_skills_internal(&pool).await
 }
 
 fn parse_skill_md(path: &Path) -> (String, Option<String>, Option<String>) {

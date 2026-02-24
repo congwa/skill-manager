@@ -163,8 +163,104 @@ const MIGRATIONS: &[Migration] = &[
         version: 2,
         name: "add_remote_sha_to_skill_sources",
         up: "
-            ALTER TABLE skill_sources ADD COLUMN remote_sha TEXT;
-            ALTER TABLE skill_sources ADD COLUMN skill_path TEXT;
+            ALTER TABLE skill_sources ADD COLUMN IF NOT EXISTS remote_sha TEXT;
+            ALTER TABLE skill_sources ADD COLUMN IF NOT EXISTS skill_path TEXT;
+        ",
+    },
+    Migration {
+        version: 3,
+        name: "add_skill_files_table",
+        up: "
+            CREATE TABLE IF NOT EXISTS skill_files (
+                id            TEXT PRIMARY KEY,
+                skill_id      TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+                relative_path TEXT NOT NULL,
+                content       BLOB NOT NULL,
+                size_bytes    INTEGER,
+                updated_at    DATETIME NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(skill_id, relative_path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_skill_files_skill_id ON skill_files(skill_id);
+        ",
+    },
+    Migration {
+        version: 4,
+        name: "remove_tool_check_constraint",
+        up: "
+            -- SQLite 不支持 ALTER TABLE DROP CONSTRAINT，需重建表以移除 tool 的 CHECK 约束，
+            -- 使 skill_deployments 支持任意 agent ID（不再限定为固定五个工具）
+            PRAGMA foreign_keys = OFF;
+
+            CREATE TABLE IF NOT EXISTS skill_deployments_new (
+                id          TEXT PRIMARY KEY,
+                skill_id    TEXT NOT NULL,
+                project_id  TEXT,
+                tool        TEXT NOT NULL,
+                path        TEXT NOT NULL UNIQUE,
+                checksum    TEXT,
+                status      TEXT NOT NULL DEFAULT 'synced'
+                            CHECK (status IN ('synced', 'diverged', 'missing', 'untracked')),
+                last_synced DATETIME,
+                created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
+                updated_at  DATETIME NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+            );
+
+            INSERT INTO skill_deployments_new
+                SELECT id, skill_id, project_id, tool, path, checksum,
+                       status, last_synced, created_at, updated_at
+                FROM skill_deployments;
+
+            DROP TABLE skill_deployments;
+            ALTER TABLE skill_deployments_new RENAME TO skill_deployments;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_deployments_unique
+                ON skill_deployments(skill_id, COALESCE(project_id, '__global__'), tool);
+            CREATE INDEX IF NOT EXISTS idx_skill_deployments_skill   ON skill_deployments(skill_id);
+            CREATE INDEX IF NOT EXISTS idx_skill_deployments_project ON skill_deployments(project_id);
+            CREATE INDEX IF NOT EXISTS idx_skill_deployments_tool    ON skill_deployments(tool);
+            CREATE INDEX IF NOT EXISTS idx_skill_deployments_status  ON skill_deployments(status);
+
+            PRAGMA foreign_keys = ON;
+        ",
+    },
+    Migration {
+        version: 5,
+        name: "git_export_config_unique_remote_url",
+        up: "
+            -- 先删除重复记录（每个 remote_url 只保留 id 字典序最小的那条）
+            DELETE FROM git_export_config
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM git_export_config
+                GROUP BY remote_url
+            );
+
+            -- 重建表，添加 remote_url UNIQUE 约束
+            CREATE TABLE IF NOT EXISTS git_export_config_new (
+                id          TEXT PRIMARY KEY,
+                provider    TEXT NOT NULL
+                            CHECK (provider IN ('github', 'gitee')),
+                remote_url  TEXT NOT NULL UNIQUE,
+                auth_type   TEXT NOT NULL
+                            CHECK (auth_type IN ('ssh', 'token')),
+                branch      TEXT NOT NULL DEFAULT 'main',
+                auto_export TEXT NOT NULL DEFAULT 'manual'
+                            CHECK (auto_export IN ('manual', 'daily', 'on-change')),
+                last_push_at  DATETIME,
+                last_pull_at  DATETIME,
+                created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
+                updated_at  DATETIME NOT NULL DEFAULT (datetime('now'))
+            );
+
+            INSERT INTO git_export_config_new
+                SELECT id, provider, remote_url, auth_type, branch, auto_export,
+                       last_push_at, last_pull_at, created_at, updated_at
+                FROM git_export_config;
+
+            DROP TABLE git_export_config;
+            ALTER TABLE git_export_config_new RENAME TO git_export_config;
         ",
     },
 ];

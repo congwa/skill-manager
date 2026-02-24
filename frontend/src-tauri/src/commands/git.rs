@@ -6,6 +6,7 @@ use std::process::Command;
 use tauri::State;
 use uuid::Uuid;
 
+use super::skill_files::{compute_db_checksum, db_import_from_dir, has_db_files};
 use super::utils::{compute_dir_checksum, copy_dir_recursive};
 use crate::db::DbPool;
 use crate::error::AppError;
@@ -201,8 +202,8 @@ pub async fn export_skills_to_git(
         remote_url, branch
     );
 
-    // 获取 skills 库路径
-    let skills_lib = get_skills_lib_path(&pool)?;
+    // 获取 skills 库路径（保留供将来降级使用）
+    let _skills_lib = get_skills_lib_path(&pool)?;
 
     // 准备导出目录
     let export_dir = std::env::temp_dir().join("skills-manager-export");
@@ -281,37 +282,38 @@ pub async fn export_skills_to_git(
         info!("[export_skills_to_git] ✅ 所有部署状态正常，无偏离");
     }
 
-    // 查询所有 Skill 并复制
+    // 查询所有 Skill，从 DB skill_files 导出到 git export 目录
     let mut stmt = conn.prepare(
-        "SELECT id, name, description, version, local_path FROM skills ORDER BY name",
+        "SELECT id, name, description, version FROM skills ORDER BY name",
     )?;
-    let skills: Vec<(String, String, Option<String>, Option<String>, Option<String>)> = stmt
+    let skills: Vec<(String, String, Option<String>, Option<String>)> = stmt
         .query_map([], |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
                 row.get(2)?,
                 row.get(3)?,
-                row.get(4)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut exported = 0;
-    for (id, name, _desc, _ver, local_path) in &skills {
-        let mut src = if let Some(lp) = local_path {
-            PathBuf::from(lp)
+    for (id, name, _desc, _ver) in &skills {
+        let dest = export_skills_dir.join(name);
+
+        if has_db_files(&conn, id) {
+            // 优先从 DB 导出
+            match super::skill_files::db_export_to_dir(&conn, id, &dest) {
+                Ok(_) => {
+                    exported += 1;
+                    info!("[export_skills_to_git] 从 DB 导出 Skill: {}", name);
+                }
+                Err(e) => {
+                    info!("[export_skills_to_git] {} 导出失败: {}", name, e);
+                }
+            }
         } else {
-            skills_lib.join(name)
-        };
-
-        // local_path 无效时回退到已有部署的 deploy_path
-        let has_files = src.exists() && walkdir::WalkDir::new(&src)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .any(|e| e.file_type().is_file());
-
-        if !has_files {
+            // 降级：从已有部署路径复制
             let fallback: Option<String> = conn.query_row(
                 "SELECT path FROM skill_deployments WHERE skill_id = ?1 AND path IS NOT NULL ORDER BY last_synced DESC LIMIT 1",
                 params![id],
@@ -320,16 +322,11 @@ pub async fn export_skills_to_git(
             if let Some(ref dp) = fallback {
                 let dp_path = PathBuf::from(dp);
                 if dp_path.exists() {
-                    info!("[export_skills_to_git] {}: local_path 无效，回退到 deploy_path={}", name, dp);
-                    src = dp_path;
+                    info!("[export_skills_to_git] {}: DB 无文件，回退到 deploy_path={}", name, dp);
+                    let _ = copy_dir_recursive(&dp_path, &dest);
+                    exported += 1;
                 }
             }
-        }
-
-        if src.exists() {
-            let dest = export_skills_dir.join(name);
-            copy_dir_recursive(&src, &dest)?;
-            exported += 1;
         }
     }
 
@@ -340,7 +337,7 @@ pub async fn export_skills_to_git(
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     ));
     readme.push_str("| 名称 | 版本 | 描述 |\n|------|------|------|\n");
-    for (_id, name, desc, ver, _lp) in &skills {
+    for (_id, name, desc, ver) in &skills {
         readme.push_str(&format!(
             "| {} | {} | {} |\n",
             name,
@@ -616,76 +613,62 @@ pub async fn import_from_git_repo(
             .ok();
 
         if let Some(skill_id) = existing {
-            if dest.exists() {
-                let src_checksum = compute_dir_checksum(&src).unwrap_or_default();
-                let dest_checksum = compute_dir_checksum(&dest).unwrap_or_default();
-                if src_checksum == dest_checksum {
-                    info!("[import_from_git_repo] 跳过一致的 Skill: {}", name);
-                    skipped += 1;
-                    continue;
-                }
-                if !overwrite_conflicts {
-                    info!(
-                        "[import_from_git_repo] 跳过冲突的 Skill(不覆盖): {}",
-                        name
-                    );
-                    skipped += 1;
-                    continue;
-                }
+            let db_checksum = compute_db_checksum(&conn, &skill_id);
+            let src_checksum = compute_dir_checksum(&src);
+
+            if db_checksum.is_some() && db_checksum == src_checksum {
+                info!("[import_from_git_repo] 跳过一致的 Skill: {}", name);
+                skipped += 1;
+                continue;
             }
-            // 覆盖更新
-            if dest.exists() {
-                std::fs::remove_dir_all(&dest)
-                    .map_err(|e| AppError::Internal(format!("删除旧 Skill 目录失败: {}", e)))?;
+            if !overwrite_conflicts && has_db_files(&conn, &skill_id) {
+                info!(
+                    "[import_from_git_repo] 跳过冲突的 Skill(不覆盖): {}",
+                    name
+                );
+                skipped += 1;
+                continue;
             }
-            copy_dir_recursive(&src, &dest)?;
-            let new_checksum = compute_dir_checksum(&dest).unwrap_or_default();
+
+            // 覆盖更新：清空旧 DB 文件并导入新文件
+            conn.execute("DELETE FROM skill_files WHERE skill_id = ?1", params![skill_id])?;
+            db_import_from_dir(&conn, &skill_id, &src)?;
+            let new_checksum = compute_db_checksum(&conn, &skill_id);
             conn.execute(
                 "UPDATE skills SET description = COALESCE(?2, description), version = COALESCE(?3, version),
-                 checksum = ?4, local_path = ?5, last_modified = datetime('now'), updated_at = datetime('now')
+                 checksum = ?4, last_modified = datetime('now'), updated_at = datetime('now')
                  WHERE id = ?1",
-                params![
-                    skill_id,
-                    description,
-                    version,
-                    new_checksum,
-                    dest.to_string_lossy().to_string()
-                ],
+                params![skill_id, description, version, new_checksum],
             )?;
-            // 更新 skill_sources 记录
             conn.execute(
-                "INSERT INTO skill_sources (id, skill_id, source_type, source_url, installed_version, original_checksum)
+                "INSERT INTO skill_sources (id, skill_id, source_type, url, installed_version, original_checksum)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(skill_id) DO UPDATE SET
-                    source_url = COALESCE(?4, source_url), original_checksum = ?6, updated_at = datetime('now')",
+                    url = COALESCE(?4, url), original_checksum = ?6, updated_at = datetime('now')",
                 params![Uuid::new_v4().to_string(), skill_id, source_type, source_url, version, new_checksum],
             )?;
             updated += 1;
             info!("[import_from_git_repo] 更新 Skill: {}", name);
         } else {
-            // 新导入
-            copy_dir_recursive(&src, &dest)?;
-            let checksum = compute_dir_checksum(&dest).unwrap_or_default();
+            // 新导入：创建 skills 记录并导入文件到 DB
             let skill_id = Uuid::new_v4().to_string();
             conn.execute(
-                "INSERT INTO skills (id, name, description, version, checksum, local_path, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))",
-                params![
-                    skill_id,
-                    name,
-                    description,
-                    version,
-                    checksum,
-                    dest.to_string_lossy().to_string()
-                ],
+                "INSERT INTO skills (id, name, description, version, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))",
+                params![skill_id, name, description, version],
             )?;
-            // 创建 skill_sources 记录
+            db_import_from_dir(&conn, &skill_id, &src)?;
+            let checksum = compute_db_checksum(&conn, &skill_id);
+            conn.execute(
+                "UPDATE skills SET checksum = ?1 WHERE id = ?2",
+                params![checksum, skill_id],
+            )?;
             let source_id = Uuid::new_v4().to_string();
             conn.execute(
-                "INSERT INTO skill_sources (id, skill_id, source_type, source_url, installed_version, original_checksum)
+                "INSERT INTO skill_sources (id, skill_id, source_type, url, installed_version, original_checksum)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(skill_id) DO UPDATE SET
-                    source_type = ?3, source_url = ?4, installed_version = ?5, original_checksum = ?6, updated_at = datetime('now')",
+                    source_type = ?3, url = ?4, installed_version = ?5, original_checksum = ?6, updated_at = datetime('now')",
                 params![source_id, skill_id, source_type, source_url, version, checksum],
             )?;
             imported += 1;

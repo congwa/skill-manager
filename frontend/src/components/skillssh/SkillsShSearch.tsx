@@ -78,6 +78,12 @@ export default function SkillsShSearch() {
     }
   }, [query])
 
+  const handleClearSearch = () => {
+    setQuery('')
+    setResults([])
+    setSearched(false)
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSearch()
   }
@@ -181,7 +187,17 @@ export default function SkillsShSearch() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
           >
-            <p className="text-sm text-cream-500 mb-4">找到 {results.length} 个 Skill</p>
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-sm text-cream-500">找到 {results.length} 个 Skill</p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs h-7 text-cream-500 hover:text-cream-700"
+                onClick={handleClearSearch}
+              >
+                返回浏览
+              </Button>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {results.map((item, i) => (
                 <motion.div
@@ -195,13 +211,16 @@ export default function SkillsShSearch() {
                       <div className="flex items-start justify-between">
                         <div className="min-w-0 flex-1">
                           <h3 className="font-semibold text-cream-800 truncate">{item.name}</h3>
-                          <p className="text-xs text-cream-500 mt-1 truncate">{item.source}</p>
+                          <p className="text-xs text-cream-500 mt-0.5 truncate">{item.source}</p>
+                          {item.description && (
+                            <p className="text-xs text-cream-400 mt-1 line-clamp-2">{item.description}</p>
+                          )}
                         </div>
                         <Badge variant="outline" className="bg-lavender-100 text-lavender-400 text-xs shrink-0 ml-2">
                           skills.sh
                         </Badge>
                       </div>
-                      <div className="flex items-center justify-between pt-2">
+                      <div className="flex items-center justify-between pt-1">
                         <span className="text-xs text-cream-400">
                           <Download className="h-3 w-3 inline mr-1" />
                           {formatInstalls(item.installs)} 次安装
@@ -247,7 +266,15 @@ export default function SkillsShSearch() {
           >
             <div className="text-5xl mb-4">🔍</div>
             <h2 className="text-lg font-display font-bold text-cream-700 mb-2">没有找到匹配的 Skill</h2>
-            <p className="text-cream-500">试试其他关键词</p>
+            <p className="text-cream-500 mb-4">试试其他关键词</p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-xl"
+              onClick={handleClearSearch}
+            >
+              返回浏览
+            </Button>
           </motion.div>
         )}
 
@@ -306,13 +333,16 @@ export default function SkillsShSearch() {
                           <div className="flex items-start justify-between">
                             <div className="min-w-0 flex-1">
                               <h3 className="font-semibold text-cream-800 truncate">{item.name}</h3>
-                              <p className="text-xs text-cream-500 mt-1 truncate">{item.source}</p>
+                              <p className="text-xs text-cream-500 mt-0.5 truncate">{item.source}</p>
+                              {item.description && (
+                                <p className="text-xs text-cream-400 mt-1 line-clamp-2">{item.description}</p>
+                              )}
                             </div>
                             <Badge variant="outline" className="bg-lavender-100 text-lavender-400 text-xs shrink-0 ml-2">
                               {formatInstalls(item.installs)}
                             </Badge>
                           </div>
-                          <div className="flex items-center justify-between pt-2">
+                          <div className="flex items-center justify-between pt-1">
                             <span className="text-xs text-cream-400">
                               <Download className="h-3 w-3 inline mr-1" />
                               {formatInstalls(item.installs)} 次安装

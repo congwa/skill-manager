@@ -4,7 +4,8 @@ use std::path::Path;
 use tauri::State;
 use uuid::Uuid;
 
-use super::utils::{compute_dir_checksum, copy_dir_recursive};
+use super::skill_files::{compute_db_checksum, db_export_to_dir, db_write_file};
+use super::utils::compute_dir_checksum;
 use crate::db::DbPool;
 use crate::error::AppError;
 use crate::models::*;
@@ -30,6 +31,18 @@ struct GhTreeEntry {
 #[derive(serde::Deserialize)]
 struct GhBlobResponse {
     content: String,
+}
+
+/// GitHub Contents API 目录列表条目
+#[derive(serde::Deserialize)]
+struct GhContentsEntry {
+    name: String,
+    #[allow(dead_code)]
+    path: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+    #[serde(default)]
+    download_url: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -238,6 +251,369 @@ pub async fn fetch_skill_content(
         .map_err(|e| AppError::Internal(format!("UTF-8 解码失败: {}", e)))
 }
 
+// ── 3b. Fetch SKILL.md via raw.githubusercontent.com (no API rate limits) ──
+
+/// 直接通过 raw.githubusercontent.com 获取 SKILL.md 内容
+/// 相比 fetch_skill_content（GitHub Blob API），此方法：
+/// 1. 不消耗 GitHub API 配额（60次/小时未认证限制）
+/// 2. 不需要先扫描 Tree，只需 owner_repo + skill_path 即可
+/// 3. 延迟更低（直接返回文本，无需 base64 解码）
+#[tauri::command]
+/// 通过 raw.githubusercontent.com 按路径获取 SKILL.md / CLAUDE.md
+///
+/// 策略（按消耗 GitHub API 配额从低到高排列）：
+///   Phase 1 – raw URL 快速尝试（无 API 配额消耗）
+///   Phase 2 – Contents API 列出 skills/ 目录，找最匹配子目录（1 次 API 调用）
+///   Phase 3 – Contents API 列出仓库根目录（1 次 API 调用），处理单 skill 仓库
+///   Phase 4 – 兜底读取 CLAUDE.md / README.md（无 API 配额消耗）
+///
+/// 不再使用 Tree API（递归完整树），避免 GitHub 匿名 rate limit 问题。
+pub async fn fetch_skill_readme(
+    owner_repo: String,
+    skill_path: String,
+    token: Option<String>,
+) -> Result<String, AppError> {
+    info!("[fetch_skill_readme] {}/{}", owner_repo, skill_path);
+
+    let client = reqwest::Client::new();
+
+    // ── Phase 1: raw URL 快速路径（不消耗 GitHub API 配额）──
+    // skills.sh 生态最常见结构：skills/{name}/SKILL.md
+    let name_variants = derive_name_variants(&skill_path);
+    // 候选文件名：SKILL.md 优先
+    let skill_filenames = ["SKILL.md"];
+    let prefixes = ["skills/", "", "src/"];
+
+    // 只在 main 分支快速尝试最高概率路径，减少无效请求
+    for branch in &["main", "master"] {
+        for prefix in &prefixes {
+            for variant in &name_variants {
+                for filename in &skill_filenames {
+                    let url = format!(
+                        "https://raw.githubusercontent.com/{}/{}/{}{}/{}",
+                        owner_repo, branch, prefix, variant, filename
+                    );
+                    let mut req = client.get(&url).header("User-Agent", "skills-manager");
+                    if let Some(ref t) = token {
+                        req = req.header("Authorization", format!("Bearer {}", t));
+                    }
+                    match req.send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            let text = resp.text().await
+                                .map_err(|e| AppError::Internal(format!("读取内容失败: {}", e)))?;
+                            info!("[fetch_skill_readme] ✓ raw 命中: {} ({} 字节)", url, text.len());
+                            return Ok(text);
+                        }
+                        Ok(resp) => info!("[fetch_skill_readme] {} → {}", url, resp.status()),
+                        Err(e) => info!("[fetch_skill_readme] 请求失败: {}", e),
+                    }
+                }
+            }
+            // 只在标准结构失败后继续，避免过多无效请求
+        }
+    }
+
+    info!("[fetch_skill_readme] raw 快速路径全部失败，尝试 Contents API 目录列表");
+
+    // 确定默认分支（先试 main，再试 master）
+    let working_branch = detect_default_branch(&client, &owner_repo, &token).await
+        .unwrap_or_else(|| "main".to_string());
+
+    // ── Phase 2: Contents API 列出 skills/ 子目录，模糊匹配 ──
+    // 比 Tree API（recursive=1）便宜得多，只消耗 1 次 API 配额
+    for dir_prefix in &["skills", "src", ""] {
+        let contents_url = if dir_prefix.is_empty() {
+            format!(
+                "https://api.github.com/repos/{}/contents",
+                owner_repo
+            )
+        } else {
+            format!(
+                "https://api.github.com/repos/{}/contents/{}",
+                owner_repo, dir_prefix
+            )
+        };
+
+        let mut req = client
+            .get(&contents_url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "skills-manager");
+        if let Some(ref t) = token {
+            req = req.header("Authorization", format!("Bearer {}", t));
+        }
+
+        let resp = match req.send().await {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                info!("[fetch_skill_readme] Contents API {} → {}", contents_url, r.status());
+                continue;
+            }
+            Err(e) => {
+                info!("[fetch_skill_readme] Contents API 请求失败: {}", e);
+                continue;
+            }
+        };
+
+        let entries: Vec<GhContentsEntry> = match resp.json().await {
+            Ok(e) => e,
+            Err(e) => {
+                info!("[fetch_skill_readme] Contents API 解析失败: {}", e);
+                continue;
+            }
+        };
+
+        info!(
+            "[fetch_skill_readme] Contents API {} 返回 {} 条",
+            dir_prefix, entries.len()
+        );
+
+        // 先找直接的 SKILL.md 文件（根目录或 dir_prefix 下）
+        let direct_skill_md = entries.iter().find(|e| {
+            e.entry_type == "file" && (e.name == "SKILL.md" || e.name == "CLAUDE.md")
+        });
+        if let Some(file_entry) = direct_skill_md {
+            if let Some(ref dl_url) = file_entry.download_url {
+                let mut req = client.get(dl_url).header("User-Agent", "skills-manager");
+                if let Some(ref t) = token {
+                    req = req.header("Authorization", format!("Bearer {}", t));
+                }
+                if let Ok(r) = req.send().await {
+                    if r.status().is_success() {
+                        let text = r.text().await
+                            .map_err(|e| AppError::Internal(format!("读取内容失败: {}", e)))?;
+                        info!(
+                            "[fetch_skill_readme] ✓ Contents 直接命中 {}/{} ({} 字节)",
+                            dir_prefix, file_entry.name, text.len()
+                        );
+                        return Ok(text);
+                    }
+                }
+            }
+        }
+
+        // 在子目录中找最匹配的 skill 目录
+        let subdirs: Vec<&GhContentsEntry> = entries
+            .iter()
+            .filter(|e| e.entry_type == "dir")
+            .collect();
+
+        let dir_names: Vec<&str> = subdirs.iter().map(|e| e.name.as_str()).collect();
+        if let Some(best_dir_name) = find_best_dir_match(&skill_path, &dir_names) {
+            let skill_md_path = if dir_prefix.is_empty() {
+                format!("{}/SKILL.md", best_dir_name)
+            } else {
+                format!("{}/{}/SKILL.md", dir_prefix, best_dir_name)
+            };
+            let raw_url = format!(
+                "https://raw.githubusercontent.com/{}/{}/{}",
+                owner_repo, working_branch, skill_md_path
+            );
+            info!(
+                "[fetch_skill_readme] Contents 匹配: '{}' → '{}', 尝试 {}",
+                skill_path, best_dir_name, raw_url
+            );
+            let mut req = client.get(&raw_url).header("User-Agent", "skills-manager");
+            if let Some(ref t) = token {
+                req = req.header("Authorization", format!("Bearer {}", t));
+            }
+            if let Ok(r) = req.send().await {
+                if r.status().is_success() {
+                    let text = r.text().await
+                        .map_err(|e| AppError::Internal(format!("读取内容失败: {}", e)))?;
+                    info!(
+                        "[fetch_skill_readme] ✓ Contents 模糊匹配成功 ({} 字节)",
+                        text.len()
+                    );
+                    return Ok(text);
+                }
+            }
+
+            // SKILL.md 不存在，试 CLAUDE.md
+            let claude_path = skill_md_path.replace("SKILL.md", "CLAUDE.md");
+            let claude_url = format!(
+                "https://raw.githubusercontent.com/{}/{}/{}",
+                owner_repo, working_branch, claude_path
+            );
+            let mut req = client.get(&claude_url).header("User-Agent", "skills-manager");
+            if let Some(ref t) = token {
+                req = req.header("Authorization", format!("Bearer {}", t));
+            }
+            if let Ok(r) = req.send().await {
+                if r.status().is_success() {
+                    let text = r.text().await
+                        .map_err(|e| AppError::Internal(format!("读取内容失败: {}", e)))?;
+                    info!("[fetch_skill_readme] ✓ CLAUDE.md 匹配成功 ({} 字节)", text.len());
+                    return Ok(text);
+                }
+            }
+        }
+    }
+
+    // ── Phase 3: 兜底——读取仓库根目录 CLAUDE.md 或 README.md ──
+    // 适用于单 skill 仓库（如 nextlevelbuilder/ui-ux-pro-max-skill）
+    for fallback_file in &["CLAUDE.md", "README.md"] {
+        let url = format!(
+            "https://raw.githubusercontent.com/{}/{}/{}",
+            owner_repo, working_branch, fallback_file
+        );
+        let mut req = client.get(&url).header("User-Agent", "skills-manager");
+        if let Some(ref t) = token {
+            req = req.header("Authorization", format!("Bearer {}", t));
+        }
+        if let Ok(resp) = req.send().await {
+            if resp.status().is_success() {
+                let text = resp.text().await
+                    .map_err(|e| AppError::Internal(format!("读取内容失败: {}", e)))?;
+                info!("[fetch_skill_readme] ✓ 兜底 {} ({} 字节)", fallback_file, text.len());
+                return Ok(text);
+            }
+        }
+    }
+
+    Err(AppError::Internal(format!(
+        "无法获取 {}/{} 的 Skill 内容（已尝试 raw 路径、Contents API 目录列表及兜底文件）",
+        owner_repo, skill_path
+    )))
+}
+
+/// 从 skill_id/skill_path 推导可能的目录名变体
+/// 处理 skills.sh ID 与实际 GitHub 目录名的常见差异
+fn derive_name_variants(skill_path: &str) -> Vec<String> {
+    let mut variants = vec![skill_path.to_string()];
+
+    // 去掉第一个 "-" 前的 org 前缀（如 "vercel-react-native" → "react-native"）
+    if let Some(idx) = skill_path.find('-') {
+        let without_prefix = &skill_path[idx + 1..];
+        if !without_prefix.is_empty() && without_prefix != skill_path {
+            variants.push(without_prefix.to_string());
+        }
+    }
+
+    // 去掉多个常见 org 前缀
+    for prefix in &["vercel-", "react-", "nextjs-", "vue-", "angular-", "remotion-"] {
+        if let Some(stripped) = skill_path.strip_prefix(prefix) {
+            if !stripped.is_empty() {
+                variants.push(stripped.to_string());
+            }
+        }
+    }
+
+    // 去掉常见后缀（如 "best-practices" 中第一个词作为简称）
+    // 例如 "remotion-best-practices" → "remotion"
+    if let Some(idx) = skill_path.find('-') {
+        let first_word = &skill_path[..idx];
+        if first_word.len() >= 3 {
+            variants.push(first_word.to_string());
+        }
+    }
+
+    // 去重保序
+    let mut seen = std::collections::HashSet::new();
+    variants.retain(|v| seen.insert(v.clone()));
+    variants
+}
+
+/// 从 Contents API 返回的目录名列表中，找与 skill_name 最匹配的目录名
+/// 策略顺序：精确匹配 → 包含匹配 → 去前缀后匹配 → 词语重叠最多
+fn find_best_dir_match<'a>(skill_name: &str, dir_names: &[&'a str]) -> Option<&'a str> {
+    let skill_lower = skill_name.to_lowercase();
+
+    // 1. 精确匹配
+    for &name in dir_names {
+        if name.to_lowercase() == skill_lower {
+            return Some(name);
+        }
+    }
+
+    // 2. skill_name 包含目录名，或目录名包含 skill_name
+    for &name in dir_names {
+        let name_lower = name.to_lowercase();
+        if skill_lower.contains(&name_lower) || name_lower.contains(&skill_lower) {
+            return Some(name);
+        }
+    }
+
+    // 3. 去掉双方第一段前缀后比较（"remotion-best-practices" 的第一词 "remotion" vs dir "remotion"）
+    let skill_first_word = skill_lower
+        .split('-')
+        .next()
+        .unwrap_or(&skill_lower);
+    let skill_core = skill_lower
+        .find('-')
+        .map(|i| &skill_lower[i + 1..])
+        .unwrap_or(&skill_lower);
+
+    for &name in dir_names {
+        let name_lower = name.to_lowercase();
+        // 目录名与 skill 第一个词完全匹配（"remotion" == "remotion"）
+        if name_lower == skill_first_word {
+            return Some(name);
+        }
+        let dir_core = name_lower
+            .find('-')
+            .map(|i| name_lower[i + 1..].to_string())
+            .unwrap_or_else(|| name_lower.clone());
+        if skill_core == dir_core || skill_core.contains(&dir_core as &str) || dir_core.contains(skill_core) {
+            return Some(name);
+        }
+    }
+
+    // 4. 词语重叠：计算共同的连字符分词数量
+    let mut best: Option<(&str, usize)> = None;
+    for &name in dir_names {
+        let name_lower_owned = name.to_lowercase();
+        let dir_words: std::collections::HashSet<&str> = name_lower_owned
+            .split('-')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .collect();
+        // 由于生命周期限制，重新基于 skill_lower 分词
+        let overlap = skill_lower.split('-')
+            .filter(|w| name_lower_owned.split('-').any(|d| d == *w))
+            .count();
+        let _ = dir_words; // suppress unused
+        if overlap > 0 {
+            match best {
+                None => best = Some((name, overlap)),
+                Some((_, prev)) if overlap > prev => best = Some((name, overlap)),
+                _ => {}
+            }
+        }
+    }
+    if let Some((name, _)) = best {
+        return Some(name);
+    }
+
+    None
+}
+
+/// 检测仓库默认分支，通过 GitHub refs API 验证（消耗 1 次配额）
+async fn detect_default_branch(
+    client: &reqwest::Client,
+    owner_repo: &str,
+    token: &Option<String>,
+) -> Option<String> {
+    for branch in &["main", "master"] {
+        let api_url = format!(
+            "https://api.github.com/repos/{}/git/refs/heads/{}",
+            owner_repo, branch
+        );
+        let mut req = client
+            .get(&api_url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "skills-manager");
+        if let Some(ref t) = token {
+            req = req.header("Authorization", format!("Bearer {}", t));
+        }
+        if let Ok(r) = req.send().await {
+            if r.status().is_success() {
+                return Some(branch.to_string());
+            }
+        }
+    }
+    Some("main".to_string())
+}
+
 // ── 4. Install from skills.sh ──
 
 #[tauri::command]
@@ -316,102 +692,118 @@ pub async fn install_from_skills_sh(
         }
     }
 
-    // Step 2: Download all files to local skill library
-    let home = dirs::home_dir().expect("Cannot find home directory");
-    let local_skill_dir = home
-        .join(".skills-manager")
-        .join("skills")
-        .join(&skill_name);
+    // Step 2: 先确定 skill_id（用于写入 DB skill_files）
+    // 需要先 INSERT OR 获取已有记录，再写文件
+    let pre_skill_id: String = {
+        let conn = pool.get()?;
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT id FROM skills WHERE name = ?1",
+                params![skill_name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        existing.unwrap_or_else(|| Uuid::new_v4().to_string())
+    };
 
-    // Clean existing dir if force overwrite
-    if local_skill_dir.exists() && force {
-        let _ = std::fs::remove_dir_all(&local_skill_dir);
+    // 若强制覆盖，先清空 DB 中的旧文件
+    if force {
+        let conn = pool.get()?;
+        let _ = conn.execute(
+            "DELETE FROM skill_files WHERE skill_id = ?1",
+            params![pre_skill_id],
+        );
     }
-    std::fs::create_dir_all(&local_skill_dir)
-        .map_err(|e| AppError::Io(e))?;
 
     let client = reqwest::Client::new();
     let mut files_downloaded = 0usize;
+    let mut skill_md_content: Option<String> = None;
 
-    for file_entry in &files {
-        // Extract relative path within skill folder
-        let relative_path = file_entry
-            .path
-            .strip_prefix(&format!("{}/", skill_path))
-            .unwrap_or(&file_entry.path);
+    {
+        let conn = pool.get()?;
+        for file_entry in &files {
+            // 提取相对于 skill_path 的路径
+            let relative_path = file_entry
+                .path
+                .strip_prefix(&format!("{}/", skill_path))
+                .unwrap_or(&file_entry.path);
 
-        // Skip excluded files
-        let filename = Path::new(relative_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-        if filename == "README.md" || filename == "metadata.json" || filename.starts_with('_') {
-            continue;
-        }
+            // 跳过不需要的文件
+            let filename = Path::new(relative_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if filename == "README.md" || filename == "metadata.json" || filename.starts_with('_') {
+                continue;
+            }
 
-        let blob_url = format!(
-            "https://api.github.com/repos/{}/git/blobs/{}",
-            owner_repo, file_entry.sha
-        );
-
-        let mut req = client
-            .get(&blob_url)
-            .header("Accept", "application/vnd.github.v3+json")
-            .header("User-Agent", "skills-manager");
-
-        if let Some(t) = &token {
-            req = req.header("Authorization", format!("Bearer {}", t));
-        }
-
-        let resp = req.send().await.map_err(|e| {
-            AppError::Internal(format!("下载文件 {} 失败: {}", relative_path, e))
-        })?;
-
-        if !resp.status().is_success() {
-            info!(
-                "[install_from_skills_sh] 跳过文件 {} (HTTP {})",
-                relative_path,
-                resp.status()
+            let blob_url = format!(
+                "https://api.github.com/repos/{}/git/blobs/{}",
+                owner_repo, file_entry.sha
             );
-            continue;
+
+            let mut req = client
+                .get(&blob_url)
+                .header("Accept", "application/vnd.github.v3+json")
+                .header("User-Agent", "skills-manager");
+
+            if let Some(t) = &token {
+                req = req.header("Authorization", format!("Bearer {}", t));
+            }
+
+            let resp = req.send().await.map_err(|e| {
+                AppError::Internal(format!("下载文件 {} 失败: {}", relative_path, e))
+            })?;
+
+            if !resp.status().is_success() {
+                info!(
+                    "[install_from_skills_sh] 跳过文件 {} (HTTP {})",
+                    relative_path,
+                    resp.status()
+                );
+                continue;
+            }
+
+            let blob: GhBlobResponse = resp.json().await.map_err(|e| {
+                AppError::Internal(format!("解析文件 {} 失败: {}", relative_path, e))
+            })?;
+
+            let clean_b64: String = blob.content.chars().filter(|c| !c.is_whitespace()).collect();
+            let decoded =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &clean_b64)
+                    .map_err(|e| {
+                        AppError::Internal(format!("解码文件 {} 失败: {}", relative_path, e))
+                    })?;
+
+            // 写入 DB skill_files（权威源）
+            db_write_file(&conn, &pre_skill_id, relative_path, &decoded)?;
+            files_downloaded += 1;
+
+            // 记录 SKILL.md 内容用于解析 frontmatter
+            if relative_path == "SKILL.md" {
+                skill_md_content = String::from_utf8(decoded).ok();
+            }
         }
-
-        let blob: GhBlobResponse = resp.json().await.map_err(|e| {
-            AppError::Internal(format!("解析文件 {} 失败: {}", relative_path, e))
-        })?;
-
-        let clean_b64: String = blob.content.chars().filter(|c| !c.is_whitespace()).collect();
-        let decoded =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &clean_b64)
-                .map_err(|e| {
-                    AppError::Internal(format!("解码文件 {} 失败: {}", relative_path, e))
-                })?;
-
-        let target_path = local_skill_dir.join(relative_path);
-        if let Some(parent) = target_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&target_path, &decoded)?;
-        files_downloaded += 1;
     }
 
     info!(
-        "[install_from_skills_sh] 下载完成: {} 个文件",
+        "[install_from_skills_sh] 下载完成: {} 个文件写入 DB",
         files_downloaded
     );
 
     // Step 3: Parse SKILL.md frontmatter for description/version
-    let skill_md_path = local_skill_dir.join("SKILL.md");
-    let (description, version) = if skill_md_path.exists() {
-        let content = std::fs::read_to_string(&skill_md_path)?;
-        parse_skill_md_frontmatter(&content)
+    let (description, version) = if let Some(ref content) = skill_md_content {
+        parse_skill_md_frontmatter(content)
     } else {
         (None, None)
     };
 
-    // Step 4: Compute checksum and write to database
-    let checksum = compute_dir_checksum(&local_skill_dir);
-    let local_path_str = local_skill_dir.to_string_lossy().to_string();
+    // Step 4: Compute checksum from DB files and write to database
+    let checksum = {
+        let conn = pool.get()?;
+        compute_db_checksum(&conn, &pre_skill_id)
+    };
+    let local_path_str = String::new(); // DB 是权威源，local_path 不再必要
     let source_url = format!(
         "https://skills.sh/{}/{}",
         owner_repo,
@@ -422,7 +814,6 @@ pub async fn install_from_skills_sh(
         let conn = pool.get()?;
         let tx = conn.unchecked_transaction()?;
 
-        // Check if skill already exists (for force overwrite case)
         let existing_id: Option<String> = tx
             .query_row(
                 "SELECT id FROM skills WHERE name = ?1",
@@ -435,10 +826,9 @@ pub async fn install_from_skills_sh(
             // Update existing
             tx.execute(
                 "UPDATE skills SET description = ?1, version = ?2, checksum = ?3,
-                        local_path = ?4, last_modified = datetime('now'),
-                        updated_at = datetime('now')
-                 WHERE id = ?5",
-                params![description, version, checksum, local_path_str, eid],
+                        last_modified = datetime('now'), updated_at = datetime('now')
+                 WHERE id = ?4",
+                params![description, version, checksum, eid],
             )?;
             tx.execute(
                 "UPDATE skill_sources SET source_type = 'skills-sh', url = ?1,
@@ -450,14 +840,13 @@ pub async fn install_from_skills_sh(
             )?;
             eid
         } else {
-            // Insert new
-            let new_id = Uuid::new_v4().to_string();
+            // Insert new（使用前面预分配的 pre_skill_id）
             let source_id = Uuid::new_v4().to_string();
 
             tx.execute(
-                "INSERT INTO skills (id, name, description, version, checksum, local_path, last_modified)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
-                params![new_id, skill_name, description, version, checksum, local_path_str],
+                "INSERT INTO skills (id, name, description, version, checksum, last_modified)
+                 VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
+                params![pre_skill_id, skill_name, description, version, checksum],
             )?;
 
             tx.execute(
@@ -466,7 +855,7 @@ pub async fn install_from_skills_sh(
                  VALUES (?1, ?2, 'skills-sh', ?3, ?4, ?5, ?6, ?7)",
                 params![
                     source_id,
-                    new_id,
+                    pre_skill_id,
                     source_url,
                     version,
                     checksum,
@@ -475,7 +864,7 @@ pub async fn install_from_skills_sh(
                 ],
             )?;
 
-            new_id
+            pre_skill_id.clone()
         };
 
         tx.commit()?;
@@ -485,8 +874,9 @@ pub async fn install_from_skills_sh(
     // Step 5: Deploy to targets
     let mut deployments_created = 0usize;
     for target in &deploy_targets {
+        // source_dir 参数已废弃（部署从 DB skill_files 导出），传空路径
         let deploy_result =
-            deploy_skill_internal(&pool, &skill_id, &skill_name, target, &local_skill_dir).await;
+            deploy_skill_internal(&pool, &skill_id, &skill_name, target, std::path::Path::new("")).await;
         match deploy_result {
             Ok(_) => deployments_created += 1,
             Err(e) => info!(
@@ -511,9 +901,10 @@ pub async fn install_from_skills_sh(
         skill_id, files_downloaded, deployments_created
     );
 
+    let _ = local_path_str; // DB 是权威源，不再返回 local_path
     Ok(SkillsShInstallResult {
         skill_id,
-        local_path: local_path_str,
+        local_path: String::new(),
         files_downloaded,
         deployments_created,
         conflict: None,
@@ -684,7 +1075,7 @@ async fn deploy_skill_internal(
     skill_id: &str,
     skill_name: &str,
     target: &DeployTarget,
-    source_dir: &Path,
+    _source_dir: &Path,
 ) -> Result<(), AppError> {
     let tool_dir = match target.tool.as_str() {
         "windsurf" => ".windsurf/skills",
@@ -725,11 +1116,14 @@ async fn deploy_skill_internal(
         return Err(AppError::Validation("skill_name 不能为空，拒绝部署".into()));
     }
 
-    // Copy files
+    // 从 DB skill_files 导出到部署目标目录
     if deploy_path.exists() {
         let _ = std::fs::remove_dir_all(&deploy_path);
     }
-    copy_dir_recursive(source_dir, &deploy_path)?;
+    {
+        let conn = pool.get()?;
+        db_export_to_dir(&conn, skill_id, &deploy_path)?;
+    }
 
     let deploy_checksum = compute_dir_checksum(&deploy_path);
     let deploy_path_str = deploy_path.to_string_lossy().to_string();

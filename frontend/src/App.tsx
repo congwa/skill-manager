@@ -8,17 +8,12 @@ import ProjectDetail from '@/pages/ProjectDetail'
 import SkillList from '@/pages/SkillList'
 import SkillDetail from '@/pages/SkillDetail'
 import SkillEditor from '@/pages/SkillEditor'
-import SkillExplorer from '@/pages/SkillExplorer'
 import SkillsStore from '@/pages/SkillsStore'
-import GitImport from '@/pages/GitImport'
-import SyncCenter from '@/pages/SyncCenter'
-import UpdateManager from '@/pages/UpdateManager'
 import Settings from '@/pages/Settings'
 import { useUIStore } from '@/stores/useUIStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useSkillStore } from '@/stores/useSkillStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
-import { useSyncStore } from '@/stores/useSyncStore'
 import { settingsApi, scannerApi, deploymentsApi } from '@/lib/tauri-api'
 import { toast } from 'sonner'
 
@@ -29,9 +24,6 @@ function App() {
   const fetchSkills = useSkillStore((s) => s.fetchSkills)
   const fetchDeployments = useSkillStore((s) => s.fetchDeployments)
   const fetchSettings = useSettingsStore((s) => s.fetchSettings)
-  const fetchChangeEvents = useSyncStore((s) => s.fetchChangeEvents)
-  const fetchSyncHistory = useSyncStore((s) => s.fetchSyncHistory)
-  const fetchGitConfig = useSyncStore((s) => s.fetchGitConfig)
   const [appReady, setAppReady] = useState(false)
 
   useEffect(() => {
@@ -80,12 +72,9 @@ function App() {
         fetchSkills(),
         fetchDeployments(),
         fetchSettings(),
-        fetchChangeEvents(),
-        fetchSyncHistory(),
-        fetchGitConfig(),
       ])
 
-      const names = ['onboarding', 'projects', 'skills', 'deployments', 'settings', 'changeEvents', 'syncHistory', 'gitConfig']
+      const names = ['onboarding', 'projects', 'skills', 'deployments', 'settings']
       results.forEach((r, i) => {
         if (r.status === 'fulfilled') {
           console.log(`[App]   ✓ ${names[i]} 加载成功`)
@@ -108,8 +97,6 @@ function App() {
       'skill-change',
       (event) => {
         console.log('[App] 收到 skill-change 事件:', event.payload)
-        // 自动刷新变更事件和部署数据
-        fetchChangeEvents()
         fetchDeployments()
         toast.info(`检测到文件变更: ${event.payload.event_type}`, {
           description: event.payload.path.split('/').slice(-3).join('/'),
@@ -118,7 +105,7 @@ function App() {
       }
     ).then((fn) => { unlisten = fn })
     return () => { unlisten?.() }
-  }, [fetchChangeEvents, fetchDeployments])
+  }, [fetchDeployments])
 
   if (!appReady) {
     return (
@@ -141,11 +128,7 @@ function App() {
           <Route path="/skills" element={<SkillList />} />
           <Route path="/skills/:skillId" element={<SkillDetail />} />
           <Route path="/skills/:skillId/edit" element={<SkillEditor />} />
-          <Route path="/explorer" element={<SkillExplorer />} />
           <Route path="/store" element={<SkillsStore />} />
-          <Route path="/import" element={<GitImport />} />
-          <Route path="/sync" element={<SyncCenter />} />
-          <Route path="/updates" element={<UpdateManager />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/" element={<Navigate to={onboardingCompleted ? '/projects' : '/onboarding'} replace />} />
         </Route>

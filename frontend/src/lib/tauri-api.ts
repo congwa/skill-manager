@@ -59,10 +59,13 @@ export interface SkillRow {
   description: string | null
   version: string | null
   checksum: string | null
-  local_path: string | null
+  /** @deprecated DB 是权威源，local_path 不再保证有效。请使用 skill_id 访问文件内容 */
+  local_path?: string | null
   last_modified: string | null
   created_at: string
   updated_at: string
+  /** 来源类型：'local' | 'skills-sh' | 'github' | 'gitee' */
+  source_type: string
 }
 
 export interface SkillSourceRow {
@@ -100,9 +103,21 @@ export const skillsApi = {
   delete: (skillId: string) => invoke<void>('delete_skill', { skillId }),
   getSource: (skillId: string) => invoke<SkillSourceRow | null>('get_skill_source', { skillId }),
   getBackups: (skillId: string) => invoke<SkillBackupRow[]>('get_skill_backups', { skillId }),
-  readFile: (filePath: string) => invoke<string>('read_skill_file', { filePath }),
-  writeFile: (filePath: string, content: string) => invoke<void>('write_skill_file', { filePath, content }),
-  listFiles: (dirPath: string) => invoke<string[]>('list_skill_files', { dirPath }),
+  /** 从 DB 读取 Skill 文件内容（文本） */
+  readFile: (skillId: string, relPath: string) =>
+    invoke<string>('read_skill_file', { skillId, relPath }),
+  /** 写入文本内容到 DB Skill 文件 */
+  writeFile: (skillId: string, relPath: string, content: string) =>
+    invoke<void>('write_skill_file', { skillId, relPath, content }),
+  /** 列出 DB 中 Skill 的所有文件相对路径 */
+  listFiles: (skillId: string) =>
+    invoke<string[]>('list_skill_files', { skillId }),
+  /** 导出 Skill 文件到本地路径（供编辑器打开），返回路径 */
+  exportToLocal: (skillId: string) =>
+    invoke<string>('export_skill_to_local', { skillId }),
+  /** 通过 skill_id 在编辑器中打开 Skill（自动先导出到本地） */
+  openSkillInEditor: (skillId: string, editor?: string) =>
+    invoke<string>('open_skill_in_editor', { skillId, editor: editor ?? null }),
   checkUpdates: () => invoke<SkillUpdateInfoRow[]>('check_skill_updates'),
   updateFromLibrary: (skillId: string, syncDeployments: boolean, projectIds?: string[], toolNames?: string[]) =>
     invoke<SkillUpdateResultRow>('update_skill_from_library', {
@@ -543,6 +558,8 @@ export interface SkillsShSearchResult {
   name: string
   installs: number
   source: string
+  /** skills.sh API 可能返回的简短描述 */
+  description?: string | null
 }
 
 export interface RepoFileEntry {
@@ -617,6 +634,9 @@ export const skillsShApi = {
     invoke<RepoTreeResult>('get_skill_repo_tree', { ownerRepo, token }),
   fetchContent: (ownerRepo: string, blobSha: string, token?: string) =>
     invoke<string>('fetch_skill_content', { ownerRepo, blobSha, token }),
+  /** 直接通过 raw.githubusercontent.com 获取 SKILL.md，不消耗 GitHub API 配额 */
+  fetchReadme: (ownerRepo: string, skillPath: string, token?: string) =>
+    invoke<string>('fetch_skill_readme', { ownerRepo, skillPath, token }),
   install: (params: {
     ownerRepo: string
     skillPath: string

@@ -9,7 +9,7 @@ function mapSkillRow(row: SkillRow): Skill {
     name: row.name,
     description: row.description || '',
     version: row.version || '',
-    source: 'local',
+    source: (row.source_type as Skill['source']) || 'local',
     local_path: row.local_path || '',
     checksum: row.checksum || '',
     tags: [],

@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
+import appIcon from '@/assets/app-icon.png'
 import {
   Settings as SettingsIcon, Folder, GitBranch, RefreshCw,
-  Download, Wrench, Database, Info, Check,
+  Wrench, Database, Info, Check,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -20,18 +20,53 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useSettingsStore } from '@/stores/useSettingsStore'
-import { cn, toolColors, toolNames } from '@/lib/utils'
-import type { ToolName } from '@/types'
+import { cn } from '@/lib/utils'
+import { ALL_TOOLS } from '@/lib/tools'
 import { toast } from 'sonner'
 import { useTheme } from 'next-themes'
 import { settingsApi, gitApi } from '@/lib/tauri-api'
+
+import { ToolIcon } from '@/components/ui/ToolIcon'
+
+function ToolCard({ tool }: { tool: typeof ALL_TOOLS[number] }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div
+      className={cn(
+        'border border-cream-150 rounded-xl p-3 cursor-pointer transition-all hover:shadow-sm hover:border-cream-300 bg-white',
+        open && 'border-cream-300 shadow-sm'
+      )}
+      onClick={() => setOpen((v) => !v)}
+    >
+      <div className="flex items-center gap-3">
+        <ToolIcon tool={tool.id} size={36} rounded="rounded-xl" />
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-sm text-cream-800 truncate">{tool.name}</p>
+          <p className="text-xs text-cream-400 font-mono truncate">{tool.projectDir}</p>
+        </div>
+        <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tool.color }} />
+      </div>
+      {open && (
+        <div className="mt-3 pt-3 border-t border-cream-100 space-y-1.5 text-xs text-cream-500">
+          <div className="flex gap-2">
+            <span className="text-cream-400 shrink-0">项目级：</span>
+            <code className="font-mono text-cream-600">{'{project}/'}{tool.projectDir}</code>
+          </div>
+          <div className="flex gap-2">
+            <span className="text-cream-400 shrink-0">全局：</span>
+            <code className="font-mono text-cream-600">{'~/'}{tool.globalDir}</code>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 const sections = [
   { id: 'general', label: '通用', icon: SettingsIcon },
   { id: 'library', label: '本地 Skill 库', icon: Folder },
   { id: 'git', label: 'Git 仓库', icon: GitBranch },
   { id: 'sync', label: '同步', icon: RefreshCw },
-  { id: 'update', label: '更新', icon: Download },
   { id: 'tools', label: '工具目录', icon: Wrench },
   { id: 'data', label: '数据管理', icon: Database },
   { id: 'about', label: '关于', icon: Info },
@@ -54,6 +89,11 @@ export default function Settings() {
   const [savedField, setSavedField] = useState<string | null>(null)
   const [githubToken, setGithubToken] = useState('')
   const [tokenSaving, setTokenSaving] = useState(false)
+
+  const openGitHub = async () => {
+    const { open } = await import('@tauri-apps/plugin-shell')
+    await open('https://github.com/congwa/skill-manager')
+  }
 
   const handleFactoryReset = async () => {
     setFactoryResetLoading(true)
@@ -138,14 +178,6 @@ export default function Settings() {
       setTesting(false)
     }
   }
-
-  const tools: { name: ToolName; pattern: string; globalPath: string; detected: boolean }[] = [
-    { name: 'windsurf', pattern: '.windsurf/skills/', globalPath: '~/.windsurf/skills/', detected: true },
-    { name: 'cursor', pattern: '.cursor/skills/', globalPath: '~/.cursor/skills/', detected: true },
-    { name: 'claude-code', pattern: '.claude/skills/', globalPath: '~/.claude/skills/', detected: true },
-    { name: 'codex', pattern: '.codex/skills/', globalPath: '~/.codex/skills/', detected: false },
-    { name: 'trae', pattern: '.trae/skills/', globalPath: '~/.trae/skills/', detected: false },
-  ]
 
   return (
     <div className="flex gap-6 min-h-[calc(100vh-10rem)]">
@@ -248,42 +280,87 @@ export default function Settings() {
 
           {/* Git 仓库 */}
           {activeSection === 'git' && (
-            <Card>
-              <CardHeader><CardTitle>Git 仓库配置</CardTitle></CardHeader>
-              <CardContent className="space-y-4">
-                <Tabs value={gitPlatform} onValueChange={setGitPlatform}>
-                  <TabsList className="grid w-full grid-cols-2">
-                    <TabsTrigger value="github">GitHub</TabsTrigger>
-                    <TabsTrigger value="gitee">Gitee</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-                <div className="space-y-3">
-                  <div className="space-y-1">
-                    <Label>仓库地址</Label>
-                    <Input value={gitUrl} onChange={(e) => setGitUrl(e.target.value)} />
+            <div className="space-y-4">
+              <Card>
+                <CardHeader><CardTitle>Git 仓库配置</CardTitle></CardHeader>
+                <CardContent className="space-y-4">
+                  <p className="text-xs text-cream-500">
+                    配置 Git 仓库后，可在技能库页面导入 Git Skill，也可在技能详情的"同步"Tab 将数据库推送到 Git。
+                  </p>
+                  <Tabs value={gitPlatform} onValueChange={setGitPlatform}>
+                    <TabsList className="grid w-full grid-cols-2">
+                      <TabsTrigger value="github">GitHub</TabsTrigger>
+                      <TabsTrigger value="gitee">Gitee</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <Label>仓库地址</Label>
+                      <Input value={gitUrl} onChange={(e) => setGitUrl(e.target.value)} placeholder="https://github.com/user/my-skills" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>认证方式</Label>
+                      <RadioGroup value={authType} onValueChange={setAuthType} className="flex gap-4">
+                        <div className="flex items-center gap-2"><RadioGroupItem value="ssh" id="s-ssh" /><Label htmlFor="s-ssh">SSH Key</Label></div>
+                        <div className="flex items-center gap-2"><RadioGroupItem value="token" id="s-token" /><Label htmlFor="s-token">HTTPS Token</Label></div>
+                      </RadioGroup>
+                    </div>
+                    <div className="space-y-1">
+                      <Label>导出分支</Label>
+                      <Input defaultValue="main" className="w-32" />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={handleSaveGitConfig} className="flex-1">保存配置</Button>
+                      <Button variant="outline" size="sm" onClick={handleTestConnection} disabled={testing} className={cn(
+                        'flex-1',
+                        testResult === 'success' && 'border-mint-400 text-mint-500',
+                        testResult === 'fail' && 'border-strawberry-400 text-strawberry-500',
+                      )}>
+                        {testing ? '测试中...' : testResult === 'success' ? '✓ 连接成功' : testResult === 'fail' ? '✗ 连接失败' : '测试连接'}
+                      </Button>
+                    </div>
                   </div>
-                  <div className="space-y-1">
-                    <Label>认证方式</Label>
-                    <RadioGroup value={authType} onValueChange={setAuthType} className="flex gap-4">
-                      <div className="flex items-center gap-2"><RadioGroupItem value="ssh" id="s-ssh" /><Label htmlFor="s-ssh">SSH Key</Label></div>
-                      <div className="flex items-center gap-2"><RadioGroupItem value="token" id="s-token" /><Label htmlFor="s-token">HTTPS Token</Label></div>
-                    </RadioGroup>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader><CardTitle className="text-base">GitHub Token (skills.sh)</CardTitle></CardHeader>
+                <CardContent className="space-y-3">
+                  <p className="text-xs text-cream-500">
+                    用于商城搜索和安装，无 Token 时 API 限制 60 次/小时，有 Token 提升至 5000 次/小时。
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="password"
+                      placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                      value={githubToken}
+                      onChange={(e) => setGithubToken(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={tokenSaving}
+                      onClick={async () => {
+                        setTokenSaving(true)
+                        try {
+                          await settingsApi.set('github_token', githubToken)
+                          toast.success('GitHub Token 已保存')
+                          showSaved('token')
+                        } catch (e) {
+                          toast.error('保存失败: ' + String(e))
+                        } finally {
+                          setTokenSaving(false)
+                        }
+                      }}
+                    >
+                      {tokenSaving ? '保存中...' : '保存'}
+                    </Button>
+                    {savedField === 'token' && <Check className="h-4 w-4 text-mint-500 animate-in fade-in" />}
                   </div>
-                  <div className="space-y-1">
-                    <Label>导出分支</Label>
-                    <Input defaultValue="main" className="w-32" />
-                  </div>
-                  <Button variant="outline" size="sm" onClick={handleSaveGitConfig} className="w-full mb-2">保存配置</Button>
-                  <Button variant="outline" size="sm" onClick={handleTestConnection} disabled={testing} className={cn(
-                    'w-full',
-                    testResult === 'success' && 'border-mint-400 text-mint-500',
-                    testResult === 'fail' && 'border-strawberry-400 text-strawberry-500',
-                  )}>
-                    {testing ? '测试中...' : testResult === 'success' ? '✓ 连接成功' : testResult === 'fail' ? '✗ 连接失败' : '测试连接'}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            </div>
           )}
 
           {/* 同步设置 */}
@@ -314,90 +391,20 @@ export default function Settings() {
             </Card>
           )}
 
-          {/* 更新设置 */}
-          {activeSection === 'update' && (
-            <Card>
-              <CardHeader><CardTitle>更新设置</CardTitle></CardHeader>
-              <CardContent className="space-y-5">
-                <div className="flex items-center justify-between">
-                  <div><Label>检测频率</Label></div>
-                  <Select value={settings.update_check_frequency} onValueChange={(v) => updateSettings({ update_check_frequency: v as 'startup' | 'hourly' | 'daily' | 'manual' })}>
-                    <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="startup">启动时</SelectItem>
-                      <SelectItem value="hourly">每小时</SelectItem>
-                      <SelectItem value="daily">每日</SelectItem>
-                      <SelectItem value="manual">手动</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div><Label>自动更新</Label><p className="text-xs text-cream-500 mt-0.5">发现新版本时自动更新（仅本地 Skill 库）</p></div>
-                  <Switch checked={settings.auto_update} onCheckedChange={(v) => updateSettings({ auto_update: v })} />
-                </div>
-                <div className="border-t border-cream-200 pt-5 space-y-3">
-                  <div>
-                    <Label>GitHub Token (skills.sh)</Label>
-                    <p className="text-xs text-cream-500 mt-0.5">
-                      用于 skills.sh 搜索和安装，无 Token 时 API 限制 60 次/小时，有 Token 提升至 5000 次/小时
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="password"
-                      placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                      value={githubToken}
-                      onChange={(e) => setGithubToken(e.target.value)}
-                      className="flex-1"
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={tokenSaving}
-                      onClick={async () => {
-                        setTokenSaving(true)
-                        try {
-                          await settingsApi.set('github_token', githubToken)
-                          toast.success('GitHub Token 已保存')
-                          showSaved('token')
-                        } catch (e) {
-                          toast.error('保存失败: ' + String(e))
-                        } finally {
-                          setTokenSaving(false)
-                        }
-                      }}
-                    >
-                      {tokenSaving ? '保存中...' : '保存'}
-                    </Button>
-                    {savedField === 'token' && <Check className="h-4 w-4 text-mint-500 animate-in fade-in" />}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
 
           {/* 工具目录 */}
           {activeSection === 'tools' && (
-            <div className="space-y-4">
-              <h2 className="text-lg font-display font-bold text-cream-800">工具目录配置</h2>
-              {tools.map((tool) => (
-                <Card key={tool.name} className={cn('border', tool.detected ? 'border-cream-200' : 'border-cream-200 opacity-60')}>
-                  <CardContent className="flex items-center gap-4 p-4">
-                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm"
-                      style={{ backgroundColor: tool.detected ? toolColors[tool.name] : '#D4C4B0' }}>
-                      {toolNames[tool.name][0]}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-semibold text-cream-800">{toolNames[tool.name]}</h3>
-                      <p className="text-xs text-cream-500">模式：{tool.pattern}</p>
-                    </div>
-                    <Input defaultValue={tool.globalPath} className="w-56" disabled={!tool.detected} />
-                    <Badge variant="outline" className={cn('text-xs', tool.detected ? 'bg-mint-100 text-mint-500' : 'bg-cream-200 text-cream-500')}>
-                      {tool.detected ? '已检测到' : '未安装'}
-                    </Badge>
-                  </CardContent>
-                </Card>
-              ))}
+            <div className="space-y-5">
+              <div>
+                <h2 className="text-lg font-display font-bold text-cream-800">支持的 Agent 工具</h2>
+                <p className="text-xs text-cream-400 mt-0.5">共 {ALL_TOOLS.length} 个工具 · 点击工具可查看路径规则</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                {ALL_TOOLS.map((tool) => (
+                  <ToolCard key={tool.id} tool={tool} />
+                ))}
+              </div>
             </div>
           )}
 
@@ -440,19 +447,21 @@ export default function Settings() {
           {activeSection === 'about' && (
             <Card>
               <CardContent className="text-center py-12 space-y-4">
-                <motion.div className="w-16 h-16 bg-gradient-to-br from-peach-400 to-peach-600 rounded-2xl flex items-center justify-center text-white text-2xl font-bold mx-auto shadow-clay"
-                  whileHover={{ scale: 1.05, rotate: 5 }}>
-                  SM
-                </motion.div>
+                <motion.img
+                  src={appIcon}
+                  alt="Skills Manager"
+                  className="w-16 h-16 object-contain mx-auto"
+                  whileHover={{ scale: 1.05, rotate: 5 }}
+                />
                 <h2 className="text-xl font-display font-bold text-cream-800">Skills Manager</h2>
                 <p className="text-sm text-cream-500">v0.1.0</p>
                 <p className="text-xs text-cream-400">React + Vite + TypeScript + TailwindCSS + shadcn/ui</p>
                 <p className="text-xs text-cream-400">Zustand + Framer Motion + GSAP</p>
                 <p className="text-xs text-cream-400 mt-4">MIT License</p>
                 <div className="flex gap-3 justify-center mt-4">
-                  <Button variant="outline" size="sm">检查应用更新</Button>
-                  <Button variant="ghost" size="sm">GitHub</Button>
-                  <Button variant="ghost" size="sm">文档</Button>
+                  <Button variant="outline" size="sm" onClick={openGitHub}>检查应用更新</Button>
+                  <Button variant="ghost" size="sm" onClick={openGitHub}>GitHub</Button>
+                  <Button variant="ghost" size="sm" onClick={openGitHub}>文档</Button>
                 </div>
               </CardContent>
             </Card>

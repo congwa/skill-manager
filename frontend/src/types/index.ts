@@ -1,4 +1,5 @@
-export type ToolName = 'windsurf' | 'cursor' | 'claude-code' | 'codex' | 'trae'
+/** Agent 工具标识符（对应 tools.ts 中的 id 字段） */
+export type ToolName = string
 
 export type DeploymentStatus = 'synced' | 'diverged' | 'missing' | 'untracked' | 'pending'
 export type SkillSource = 'local' | 'skills-sh' | 'github' | 'gitee'
@@ -24,7 +25,8 @@ export interface Skill {
   version: string
   source: SkillSource
   source_url?: string
-  local_path: string
+  /** @deprecated DB 是权威源，local_path 不再保证有效，请使用 skill_id 访问文件 */
+  local_path?: string
   checksum: string
   tags: string[]
   last_modified_at: string

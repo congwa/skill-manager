@@ -28,6 +28,8 @@ pub struct Skill {
     pub last_modified: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// 来源类型：'local' | 'skills-sh' | 'github' | 'gitee'，来自 skill_sources 表
+    pub source_type: String,
 }
 
 // ── Skill Sources ──
@@ -52,7 +54,8 @@ pub struct SkillSource {
 pub struct SkillsShSearchResult {
     #[serde(default)]
     pub id: String,
-    #[serde(default)]
+    /// skills.sh API 返回的是 camelCase "skillId"，需要显式 rename
+    #[serde(rename = "skillId", alias = "skill_id", default)]
     pub skill_id: String,
     #[serde(default)]
     pub name: String,
@@ -60,6 +63,9 @@ pub struct SkillsShSearchResult {
     pub installs: u64,
     #[serde(default)]
     pub source: String,
+    /// skills.sh API 可能返回的简短描述
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 // ── Repository Tree ──

@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Skills Manager default capabilities","local":true,"windows":["main"],"permissions":["core:default","core:window:default","core:event:default","dialog:default","fs:default","shell:allow-open"]}}

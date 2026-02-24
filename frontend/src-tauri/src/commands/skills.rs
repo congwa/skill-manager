@@ -4,7 +4,10 @@ use std::path::Path;
 use tauri::State;
 use uuid::Uuid;
 
-use super::utils::{compute_dir_checksum, copy_dir_recursive};
+use super::skill_files::{
+    compute_db_checksum, db_export_to_dir, db_export_to_lib, db_import_from_dir,
+    db_list_files, db_read_file_text, db_write_file_text, has_db_files, refresh_skill_checksum,
+};
 use crate::db::DbPool;
 use crate::error::AppError;
 use crate::models::{Skill, SkillSource, SkillBackup};
@@ -14,9 +17,12 @@ pub async fn get_skills(pool: State<'_, DbPool>) -> Result<Vec<Skill>, AppError>
     info!("[get_skills] 查询所有 Skill");
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, description, version, checksum, local_path,
-                last_modified, created_at, updated_at
-         FROM skills ORDER BY name"
+        "SELECT s.id, s.name, s.description, s.version, s.checksum, s.local_path,
+                s.last_modified, s.created_at, s.updated_at,
+                COALESCE(ss.source_type, 'local') as source_type
+         FROM skills s
+         LEFT JOIN skill_sources ss ON ss.skill_id = s.id
+         ORDER BY s.name"
     )?;
 
     let skills = stmt.query_map([], |row| {
@@ -30,6 +36,7 @@ pub async fn get_skills(pool: State<'_, DbPool>) -> Result<Vec<Skill>, AppError>
             last_modified: row.get(6)?,
             created_at: row.get(7)?,
             updated_at: row.get(8)?,
+            source_type: row.get(9)?,
         })
     })?.collect::<Result<Vec<_>, _>>()?;
 
@@ -41,9 +48,12 @@ pub async fn get_skill_by_id(skill_id: String, pool: State<'_, DbPool>) -> Resul
     info!("[get_skill_by_id] 查询 Skill: {}", skill_id);
     let conn = pool.get()?;
     let skill = conn.query_row(
-        "SELECT id, name, description, version, checksum, local_path,
-                last_modified, created_at, updated_at
-         FROM skills WHERE id = ?1",
+        "SELECT s.id, s.name, s.description, s.version, s.checksum, s.local_path,
+                s.last_modified, s.created_at, s.updated_at,
+                COALESCE(ss.source_type, 'local') as source_type
+         FROM skills s
+         LEFT JOIN skill_sources ss ON ss.skill_id = s.id
+         WHERE s.id = ?1",
         params![skill_id],
         |row| Ok(Skill {
             id: row.get(0)?,
@@ -55,6 +65,7 @@ pub async fn get_skill_by_id(skill_id: String, pool: State<'_, DbPool>) -> Resul
             last_modified: row.get(6)?,
             created_at: row.get(7)?,
             updated_at: row.get(8)?,
+            source_type: row.get(9)?,
         }),
     ).map_err(|_| AppError::NotFound(format!("Skill 不存在: {}", skill_id)))?;
 
@@ -75,20 +86,12 @@ pub async fn create_skill(
     let skill_id = Uuid::new_v4().to_string();
     let source_id = Uuid::new_v4().to_string();
 
-    let home = dirs::home_dir().expect("Cannot find home directory");
-    let local_path = home
-        .join(".skills-manager")
-        .join("skills")
-        .join(&name)
-        .to_string_lossy()
-        .to_string();
-
     let tx = conn.unchecked_transaction()?;
 
     tx.execute(
-        "INSERT INTO skills (id, name, description, version, local_path)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![skill_id, name, description, version, local_path],
+        "INSERT INTO skills (id, name, description, version)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![skill_id, name, description, version],
     ).map_err(|e| {
         if let rusqlite::Error::SqliteFailure(_, Some(ref msg)) = e {
             if msg.contains("UNIQUE") {
@@ -107,9 +110,12 @@ pub async fn create_skill(
     tx.commit()?;
 
     let skill = conn.query_row(
-        "SELECT id, name, description, version, checksum, local_path,
-                last_modified, created_at, updated_at
-         FROM skills WHERE id = ?1",
+        "SELECT s.id, s.name, s.description, s.version, s.checksum, s.local_path,
+                s.last_modified, s.created_at, s.updated_at,
+                COALESCE(ss.source_type, 'local') as source_type
+         FROM skills s
+         LEFT JOIN skill_sources ss ON ss.skill_id = s.id
+         WHERE s.id = ?1",
         params![skill_id],
         |row| Ok(Skill {
             id: row.get(0)?,
@@ -121,6 +127,7 @@ pub async fn create_skill(
             last_modified: row.get(6)?,
             created_at: row.get(7)?,
             updated_at: row.get(8)?,
+            source_type: row.get(9)?,
         }),
     )?;
 
@@ -169,7 +176,7 @@ pub async fn batch_delete_skill(
         |row| Ok((row.get(0)?, row.get(1)?)),
     ).map_err(|_| AppError::NotFound(format!("Skill 不存在: {}", skill_id)))?;
 
-    info!("[batch_delete_skill] Skill: name={}, local_path={:?}", skill_name, local_path);
+    info!("[batch_delete_skill] Skill: name={}", skill_name);
 
     // 2. 获取所有部署
     let mut stmt = conn.prepare(
@@ -181,7 +188,7 @@ pub async fn batch_delete_skill(
 
     info!("[batch_delete_skill] 找到 {} 个部署", deployments.len());
 
-    // 3. 删除部署磁盘文件
+    // 3. 删除部署磁盘文件（这些是写出到工具目录的文件）
     let mut files_removed = 0usize;
     for (dep_id, dep_path) in &deployments {
         let path = Path::new(dep_path);
@@ -202,7 +209,7 @@ pub async fn batch_delete_skill(
 
     let deployments_deleted = deployments.len();
 
-    // 4. 删除本地库文件（如果请求）
+    // 4. 删除本地库缓存目录（如果请求，且 local_path 存在）
     let mut local_lib_removed = false;
     if delete_local_lib {
         if let Some(ref lp) = local_path {
@@ -211,24 +218,21 @@ pub async fn batch_delete_skill(
                 match std::fs::remove_dir_all(lib_path) {
                     Ok(_) => {
                         local_lib_removed = true;
-                        info!("[batch_delete_skill]   删除本地库: {}", lp);
+                        info!("[batch_delete_skill]   删除本地缓存目录: {}", lp);
                     }
                     Err(e) => {
-                        info!("[batch_delete_skill]   删除本地库失败: {} — {}", lp, e);
+                        info!("[batch_delete_skill]   删除本地缓存目录失败: {} — {}", lp, e);
                     }
                 }
-            } else {
-                info!("[batch_delete_skill]   本地库路径不存在: {}", lp);
             }
-        } else {
-            info!("[batch_delete_skill]   无本地库路径，跳过");
         }
+        // DB 中的 skill_files 由 CASCADE 自动删除（见下方）
     }
 
-    // 5. 删除数据库记录（CASCADE 会删除 deployments, sources, backups）
+    // 5. 删除数据库记录（CASCADE 自动删除 skill_files, deployments, sources, backups）
     conn.execute("DELETE FROM skills WHERE id = ?1", params![skill_id])?;
     info!(
-        "[batch_delete_skill] 数据库记录已删除 (含 {} 个部署记录)",
+        "[batch_delete_skill] 数据库记录已删除 (含 {} 个部署记录, skill_files 由 CASCADE 清除)",
         deployments_deleted
     );
 
@@ -306,45 +310,60 @@ pub async fn get_skill_backups(
 
 use rusqlite::OptionalExtension;
 
+/// 从 DB 读取 Skill 文件内容（文本）
 #[tauri::command]
-pub async fn read_skill_file(file_path: String) -> Result<String, AppError> {
-    info!("[read_skill_file] 读取文件: {}", file_path);
-    let path = std::path::Path::new(&file_path);
-    if !path.exists() {
-        return Err(AppError::NotFound(format!("文件不存在: {}", file_path)));
-    }
-    let content = std::fs::read_to_string(path)?;
-    Ok(content)
+pub async fn read_skill_file(
+    skill_id: String,
+    rel_path: String,
+    pool: State<'_, DbPool>,
+) -> Result<String, AppError> {
+    info!("[read_skill_file] skill={}, path={}", skill_id, rel_path);
+    let conn = pool.get()?;
+    db_read_file_text(&conn, &skill_id, &rel_path)
 }
 
+/// 写入文本内容到 DB Skill 文件，并刷新 checksum
 #[tauri::command]
-pub async fn write_skill_file(file_path: String, content: String) -> Result<(), AppError> {
-    info!("[write_skill_file] 写入文件: {} ({} bytes)", file_path, content.len());
-    let path = std::path::Path::new(&file_path);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, content)?;
+pub async fn write_skill_file(
+    skill_id: String,
+    rel_path: String,
+    content: String,
+    pool: State<'_, DbPool>,
+) -> Result<(), AppError> {
+    info!("[write_skill_file] skill={}, path={} ({} bytes)", skill_id, rel_path, content.len());
+    let conn = pool.get()?;
+    db_write_file_text(&conn, &skill_id, &rel_path, &content)?;
+    // 同步刷新 skills 表中的 checksum
+    refresh_skill_checksum(&conn, &skill_id)?;
     Ok(())
 }
 
+/// 列出 DB 中 Skill 的所有文件相对路径
 #[tauri::command]
-pub async fn list_skill_files(dir_path: String) -> Result<Vec<String>, AppError> {
-    info!("[list_skill_files] 列出目录: {}", dir_path);
-    let path = std::path::Path::new(&dir_path);
-    if !path.exists() || !path.is_dir() {
-        return Ok(vec![]);
-    }
-    let mut files = Vec::new();
-    for entry in walkdir::WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
-        if entry.file_type().is_file() {
-            if let Ok(rel) = entry.path().strip_prefix(path) {
-                files.push(rel.to_string_lossy().to_string());
-            }
-        }
-    }
-    files.sort();
-    Ok(files)
+pub async fn list_skill_files(
+    skill_id: String,
+    pool: State<'_, DbPool>,
+) -> Result<Vec<String>, AppError> {
+    info!("[list_skill_files] skill={}", skill_id);
+    let conn = pool.get()?;
+    db_list_files(&conn, &skill_id)
+}
+
+/// 将 Skill 文件从 DB 导出到 ~/.skills-manager/skills/{name}，返回路径（供编辑器打开）
+#[tauri::command]
+pub async fn export_skill_to_local(
+    skill_id: String,
+    pool: State<'_, DbPool>,
+) -> Result<String, AppError> {
+    info!("[export_skill_to_local] skill={}", skill_id);
+    let conn = pool.get()?;
+    let skill_name: String = conn.query_row(
+        "SELECT name FROM skills WHERE id = ?1",
+        params![skill_id],
+        |row| row.get(0),
+    ).map_err(|_| AppError::NotFound(format!("Skill 不存在: {}", skill_id)))?;
+    let path = db_export_to_lib(&conn, &skill_id, &skill_name)?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 // ── 更新检测 ──
@@ -426,25 +445,30 @@ pub async fn update_skill_from_library(
         skill_id, sync_deployments, project_ids, tool_names);
 
     // 1. 获取 Skill 信息
-    let (skill_name, local_path, old_checksum) = {
+    let (skill_name, old_checksum) = {
         let conn = pool.get()?;
         conn.query_row(
-            "SELECT name, local_path, checksum FROM skills WHERE id = ?1",
+            "SELECT name, checksum FROM skills WHERE id = ?1",
             params![skill_id],
             |row| Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(1)?,
             )),
         ).map_err(|_| AppError::NotFound(format!("Skill 不存在: {}", skill_id)))?
     };
 
-    let lib_dir = Path::new(&local_path);
-    if !lib_dir.exists() {
-        return Err(AppError::Validation(format!("Skill 本地路径不存在: {}", local_path)));
+    // 确保 DB 中有文件
+    {
+        let conn = pool.get()?;
+        if !has_db_files(&conn, &skill_id) {
+            return Err(AppError::Validation(format!(
+                "Skill '{}' 在 DB 中没有文件，请重新导入。",
+                skill_name
+            )));
+        }
     }
 
-    // 2. 备份旧版本
+    // 2. 备份旧版本（导出 DB 文件到备份目录）
     let backup_id = {
         let conn = pool.get()?;
         let backup_base = dirs::home_dir()
@@ -455,38 +479,41 @@ pub async fn update_skill_from_library(
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
         let backup_path = backup_base.join(&timestamp);
 
-        if lib_dir.exists() {
-            let _ = copy_dir_recursive(lib_dir, &backup_path);
-            let bid = Uuid::new_v4().to_string();
-            let bp_str = backup_path.to_string_lossy().to_string();
-            conn.execute(
-                "INSERT INTO skill_backups (id, skill_id, version_label, backup_path, checksum, reason)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'before_update')",
-                params![bid, skill_id, timestamp, bp_str, old_checksum],
-            )?;
-            info!("[update_skill_from_library] 备份完成: {}", bp_str);
-            Some(bid)
-        } else {
-            None
+        match db_export_to_dir(&conn, &skill_id, &backup_path) {
+            Ok(_) => {
+                let bid = Uuid::new_v4().to_string();
+                let bp_str = backup_path.to_string_lossy().to_string();
+                conn.execute(
+                    "INSERT INTO skill_backups (id, skill_id, version_label, backup_path, checksum, reason)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'before_update')",
+                    params![bid, skill_id, timestamp, bp_str, old_checksum],
+                )?;
+                info!("[update_skill_from_library] 备份完成: {}", bp_str);
+                Some(bid)
+            }
+            Err(e) => {
+                info!("[update_skill_from_library] 备份失败（继续）: {}", e);
+                None
+            }
         }
     };
 
-    // 3. 重新计算 checksum 并更新 skills 表
-    let new_checksum = compute_dir_checksum(lib_dir);
-    {
+    // 3. 从 DB 重新计算 checksum 并更新 skills 表
+    let new_checksum = {
         let conn = pool.get()?;
+        let cs = compute_db_checksum(&conn, &skill_id);
         conn.execute(
             "UPDATE skills SET checksum = ?1, updated_at = datetime('now') WHERE id = ?2",
-            params![new_checksum, skill_id],
+            params![cs, skill_id],
         )?;
-        // 更新 skill_sources 中的 original_checksum
         conn.execute(
             "UPDATE skill_sources SET original_checksum = ?1, updated_at = datetime('now') WHERE skill_id = ?2",
-            params![new_checksum, skill_id],
+            params![cs, skill_id],
         )?;
-    }
+        cs
+    };
 
-    // 4. 可选：同步到部署（支持按 project_ids / tool_names 筛选）
+    // 4. 可选：同步到部署（从 DB 导出到各部署目录）
     let mut deployments_synced = 0usize;
     if sync_deployments {
         let deploy_rows: Vec<(String, String)> = {
@@ -503,7 +530,6 @@ pub async fn update_skill_from_library(
                 ))
             })?.collect::<Result<Vec<_>, _>>()?;
 
-            // 按 project_ids / tool_names 过滤
             all_rows.into_iter()
                 .filter(|(_id, _path, pid, tool)| {
                     let project_ok = match &project_ids {
@@ -529,10 +555,10 @@ pub async fn update_skill_from_library(
             if dst.exists() {
                 let _ = std::fs::remove_dir_all(dst);
             }
-            let _ = copy_dir_recursive(lib_dir, dst);
-            let dep_checksum = compute_dir_checksum(dst);
-
             let conn = pool.get()?;
+            let _ = db_export_to_dir(&conn, &skill_id, dst);
+            let dep_checksum = super::utils::compute_dir_checksum(dst);
+
             conn.execute(
                 "UPDATE skill_deployments SET checksum = ?1, status = 'synced',
                         last_synced = datetime('now'), updated_at = datetime('now')
@@ -590,53 +616,57 @@ pub async fn restore_from_backup(
     }
 
     // 2. 获取 Skill 当前信息
-    let (skill_name, local_path, old_checksum) = {
+    let (skill_name, old_checksum) = {
         let conn = pool.get()?;
         conn.query_row(
-            "SELECT name, local_path, checksum FROM skills WHERE id = ?1",
+            "SELECT name, checksum FROM skills WHERE id = ?1",
             params![skill_id],
             |row| Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(1)?,
             )),
         ).map_err(|_| AppError::NotFound(format!("Skill 不存在: {}", skill_id)))?
     };
 
-    let lib_dir = Path::new(&local_path);
-
-    // 3. 备份当前版本（回滚前先备份，防止误操作）
+    // 3. 备份当前 DB 版本（回滚前先备份）
     {
         let conn = pool.get()?;
-        let backup_base = dirs::home_dir()
-            .unwrap_or_default()
-            .join(".skills-manager")
-            .join("backups")
-            .join(&skill_name);
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
-        let current_backup_path = backup_base.join(&timestamp);
+        if has_db_files(&conn, &skill_id) {
+            let backup_base = dirs::home_dir()
+                .unwrap_or_default()
+                .join(".skills-manager")
+                .join("backups")
+                .join(&skill_name);
+            let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+            let current_backup_path = backup_base.join(&timestamp);
 
-        if lib_dir.exists() {
-            let _ = copy_dir_recursive(lib_dir, &current_backup_path);
-            let bid = Uuid::new_v4().to_string();
-            let bp_str = current_backup_path.to_string_lossy().to_string();
-            conn.execute(
-                "INSERT INTO skill_backups (id, skill_id, version_label, backup_path, checksum, reason)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'before_restore')",
-                params![bid, skill_id, timestamp, bp_str, old_checksum],
-            )?;
-            info!("[restore_from_backup] 回滚前备份当前版本: {}", bp_str);
+            if let Ok(_) = db_export_to_dir(&conn, &skill_id, &current_backup_path) {
+                let bid = Uuid::new_v4().to_string();
+                let bp_str = current_backup_path.to_string_lossy().to_string();
+                let _ = conn.execute(
+                    "INSERT INTO skill_backups (id, skill_id, version_label, backup_path, checksum, reason)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'before_restore')",
+                    params![bid, skill_id, timestamp, bp_str, old_checksum],
+                );
+                info!("[restore_from_backup] 回滚前备份当前版本: {}", bp_str);
+            }
         }
     }
 
-    // 4. 用备份覆盖本地 Skill 库
-    if lib_dir.exists() {
-        std::fs::remove_dir_all(lib_dir)?;
+    // 4. 将备份目录导入到 DB skill_files（覆盖）
+    {
+        let conn = pool.get()?;
+        conn.execute("DELETE FROM skill_files WHERE skill_id = ?1", params![skill_id])?;
+        let files_imported = db_import_from_dir(&conn, &skill_id, backup_dir)?;
+        info!("[restore_from_backup] 恢复完成: {} 个文件导入到 DB", files_imported);
     }
-    let files_copied = copy_dir_recursive(backup_dir, lib_dir)?;
-    let new_checksum = compute_dir_checksum(lib_dir);
 
-    info!("[restore_from_backup] 恢复完成: {} 个文件, checksum={:?}", files_copied, new_checksum);
+    let new_checksum = {
+        let conn = pool.get()?;
+        compute_db_checksum(&conn, &skill_id)
+    };
+
+    info!("[restore_from_backup] checksum={:?}", new_checksum);
 
     // 5. 更新数据库
     {
@@ -653,7 +683,7 @@ pub async fn restore_from_backup(
         )?;
     }
 
-    // 6. 可选：同步到所有部署
+    // 6. 可选：同步到所有部署（从 DB 导出）
     let mut deployments_synced = 0usize;
     if sync_deployments {
         let deploy_rows: Vec<(String, String)> = {
@@ -672,10 +702,10 @@ pub async fn restore_from_backup(
             if dst.exists() {
                 let _ = std::fs::remove_dir_all(dst);
             }
-            let _ = copy_dir_recursive(lib_dir, dst);
-            let dep_checksum = compute_dir_checksum(dst);
-
             let conn = pool.get()?;
+            let _ = db_export_to_dir(&conn, &skill_id, dst);
+            let dep_checksum = super::utils::compute_dir_checksum(dst);
+
             conn.execute(
                 "UPDATE skill_deployments SET checksum = ?1, status = 'synced',
                         last_synced = datetime('now'), updated_at = datetime('now')
@@ -1206,6 +1236,39 @@ pub async fn apply_merge_result(
 }
 
 // ── open_in_editor ──
+
+/// 通过 skill_id 在编辑器中打开 Skill（先导出到本地，再打开）
+#[tauri::command]
+pub async fn open_skill_in_editor(
+    skill_id: String,
+    editor: Option<String>,
+    pool: State<'_, DbPool>,
+) -> Result<String, AppError> {
+    info!("[open_skill_in_editor] skill_id={}, editor={:?}", skill_id, editor);
+    let conn = pool.get()?;
+    let skill_name: String = conn.query_row(
+        "SELECT name FROM skills WHERE id = ?1",
+        params![skill_id],
+        |row| row.get(0),
+    ).map_err(|_| AppError::NotFound(format!("Skill 不存在: {}", skill_id)))?;
+
+    let path = db_export_to_lib(&conn, &skill_id, &skill_name)?;
+    let path_str = path.to_string_lossy().to_string();
+
+    let editor_cmd = editor.unwrap_or_else(|| "code".to_string());
+    let cmd = match editor_cmd.as_str() {
+        "cursor" => "cursor",
+        "windsurf" => "windsurf",
+        "code" | "vscode" => "code",
+        "zed" => "zed",
+        "sublime" => "subl",
+        "vim" | "nvim" => "nvim",
+        other => other,
+    };
+
+    let _ = std::process::Command::new(cmd).arg(&path_str).spawn();
+    Ok(path_str)
+}
 
 #[tauri::command]
 pub async fn open_in_editor(

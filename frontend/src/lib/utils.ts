@@ -1,6 +1,8 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
-import type { ToolName, DeploymentStatus, SkillSource } from '@/types'
+import type { DeploymentStatus, SkillSource } from '@/types'
+
+export { toolColors, toolNames } from '@/lib/tools'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -18,22 +20,6 @@ export function relativeTime(dateStr: string): string {
   if (hours < 24) return `${hours} 小时前`
   if (days < 30) return `${days} 天前`
   return new Date(dateStr).toLocaleDateString('zh-CN')
-}
-
-export const toolColors: Record<ToolName, string> = {
-  windsurf: '#0EA5E9',
-  cursor: '#8B5CF6',
-  'claude-code': '#D97706',
-  codex: '#059669',
-  trae: '#EC4899',
-}
-
-export const toolNames: Record<ToolName, string> = {
-  windsurf: 'Windsurf',
-  cursor: 'Cursor',
-  'claude-code': 'Claude Code',
-  codex: 'Codex',
-  trae: 'Trae',
 }
 
 export const statusColors: Record<DeploymentStatus, { bg: string; text: string; label: string }> = {

@@ -27,7 +27,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Skeleton } from '@/components/ui/skeleton'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useSkillStore } from '@/stores/useSkillStore'
-import { cn, toolColors, toolNames, relativeTime } from '@/lib/utils'
+import { cn, toolNames, relativeTime } from '@/lib/utils'
+import { ToolIcon } from '@/components/ui/ToolIcon'
 import { projectsApi } from '@/lib/tauri-api'
 import { toast } from 'sonner'
 import type { ToolName } from '@/types'
@@ -267,9 +268,8 @@ export default function ProjectList() {
                         {project.detected_tools.map((tool: ToolName) => (
                           <Tooltip key={tool}>
                             <TooltipTrigger>
-                              <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-bold text-white shadow-sm transition-transform hover:scale-110"
-                                style={{ backgroundColor: toolColors[tool] }}>
-                                {toolNames[tool][0]}
+                              <div className="transition-transform hover:scale-110">
+                                <ToolIcon tool={tool} size={28} />
                               </div>
                             </TooltipTrigger>
                             <TooltipContent><p>{toolNames[tool]}</p></TooltipContent>

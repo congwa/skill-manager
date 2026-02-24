@@ -1,8 +1,7 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
-  FolderOpen, Sparkles, Code2, Store, GitBranch, RefreshCw,
-  Download, Settings, ChevronLeft, ChevronRight,
+  FolderOpen, Sparkles, Store, Settings, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup,
@@ -11,15 +10,12 @@ import {
 } from '@/components/ui/sidebar'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import appIcon from '@/assets/app-icon.png'
 
 const menuItems = [
+  { label: '技能库', icon: Sparkles, path: '/skills' },
+  { label: '商城', icon: Store, path: '/store' },
   { label: '项目', icon: FolderOpen, path: '/projects' },
-  { label: 'Skills', icon: Sparkles, path: '/skills' },
-  { label: 'Explorer', icon: Code2, path: '/explorer' },
-  { label: '仓库', icon: Store, path: '/store' },
-  { label: 'Git 导入', icon: GitBranch, path: '/import' },
-  { label: '同步中心', icon: RefreshCw, path: '/sync' },
-  { label: '更新管理', icon: Download, path: '/updates' },
   { label: '设置', icon: Settings, path: '/settings' },
 ]
 
@@ -33,12 +29,12 @@ export function AppSidebar() {
     <Sidebar collapsible="icon" className="border-r border-cream-300 bg-cream-50">
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-2 overflow-hidden">
-          <motion.div
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-peach-400 to-peach-600 text-white font-bold text-sm"
-            whileHover={{ scale: 1.05 }}
-          >
-            SM
-          </motion.div>
+          <motion.img
+            src={appIcon}
+            alt="Skills Manager"
+            className="h-8 w-8 shrink-0 object-contain"
+            whileHover={{ scale: 1.08 }}
+          />
           {!collapsed && (
             <motion.span
               initial={{ opacity: 0 }}

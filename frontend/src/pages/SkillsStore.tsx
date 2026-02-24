@@ -1,357 +1,865 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { Search, Download, Package, FolderOpen, Globe, HardDrive, Wrench, Loader2 } from 'lucide-react'
+import {
+  Search, Download, Loader2, CheckCircle2, AlertCircle, RefreshCw,
+  Globe, Package, ChevronLeft, ChevronRight, ExternalLink, FileText,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { cn, toolNames, sourceLabels } from '@/lib/utils'
-import { useSkillStore } from '@/stores/useSkillStore'
-import { useProjectStore } from '@/stores/useProjectStore'
-import { deploymentsApi } from '@/lib/tauri-api'
-import type { ToolGroupResultData } from '@/lib/tauri-api'
-import { toast } from 'sonner'
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select'
+  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+} from '@/components/ui/sheet'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
+import { cn, toolNames } from '@/lib/utils'
+import { ToolIcon } from '@/components/ui/ToolIcon'
+import { useSkillStore } from '@/stores/useSkillStore'
+import { useProjectStore } from '@/stores/useProjectStore'
+import { skillsShApi } from '@/lib/tauri-api'
+import type { SkillsShSearchResult, RemoteUpdateInfo } from '@/lib/tauri-api'
+import { toast } from 'sonner'
 import type { ToolName } from '@/types'
-import SkillsShSearch from '@/components/skillssh/SkillsShSearch'
 
-const sourceFilters = ['全部', 'local', 'skills-sh', 'github', 'gitee']
 const TOOLS: ToolName[] = ['windsurf', 'cursor', 'claude-code', 'codex', 'trae']
+const PAGE_SIZE = 12
 
-export default function SkillsStore() {
-  const skills = useSkillStore((s) => s.skills)
-  const deployments = useSkillStore((s) => s.deployments)
-  const projects = useProjectStore((s) => s.projects)
-  const [activeTab, setActiveTab] = useState('store')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [sourceFilter, setSourceFilter] = useState('全部')
-  const [deploying, setDeploying] = useState<string | null>(null)
-  const [deployDialog, setDeployDialog] = useState<{ skillId: string; skillName: string } | null>(null)
-  const [selectedProject, setSelectedProject] = useState('')
-  const [selectedTool, setSelectedTool] = useState<ToolName>('windsurf')
-  const [toolGroups, setToolGroups] = useState<ToolGroupResultData[]>([])
-  const [loadingTools, setLoadingTools] = useState(false)
+// ── SKILL.md frontmatter 解析 ──
+interface SkillMeta {
+  name?: string
+  description?: string
+  triggers?: string
+  domain?: string
+  author?: string
+  version?: string
+}
 
-  const loadToolView = async () => {
-    setLoadingTools(true)
-    try {
-      const data = await deploymentsApi.getSkillsByTool()
-      setToolGroups(data)
-    } catch (e) {
-      toast.error('加载工具视图失败: ' + String(e))
-    } finally {
-      setLoadingTools(false)
+function parseFrontmatter(content: string): { meta: SkillMeta; body: string } {
+  if (!content.startsWith('---')) return { meta: {}, body: content }
+  const endIdx = content.indexOf('\n---', 3)
+  if (endIdx === -1) return { meta: {}, body: content }
+
+  const yaml = content.slice(3, endIdx)
+  const body = content.slice(endIdx + 4).trim()
+  const meta: SkillMeta = {}
+  let inMetadata = false
+
+  for (const line of yaml.split('\n')) {
+    if (line.trim() === 'metadata:') { inMetadata = true; continue }
+    if (inMetadata && !line.startsWith('  ')) inMetadata = false
+
+    const colonIdx = line.indexOf(':')
+    if (colonIdx === -1) continue
+    const key = line.slice(0, colonIdx).trim()
+    const value = line.slice(colonIdx + 1).trim().replace(/^["']|["']$/g, '')
+
+    if (!inMetadata) {
+      if (key === 'name') meta.name = value
+      else if (key === 'description') meta.description = value
+    } else {
+      if (key === 'triggers') meta.triggers = value
+      else if (key === 'domain') meta.domain = value
+      else if (key === 'author') meta.author = value
+      else if (key === 'version') meta.version = value
     }
   }
 
-  useEffect(() => {
-    if (activeTab === 'by-tool' && toolGroups.length === 0) {
-      loadToolView()
+  return { meta, body }
+}
+
+/**
+ * 从 SKILL.md body 中提取第一段有意义的文字作为摘要
+ * 用于 frontmatter 没有 description 字段时的降级方案
+ */
+function extractBodySummary(body: string, maxLen = 180): string | null {
+  let current = ''
+  for (const line of body.split('\n')) {
+    const t = line.trim()
+    // 跳过标题、代码块、表格、列表、分隔线
+    if (!t || t.startsWith('#') || t.startsWith('|') || t.startsWith('```')
+      || t.startsWith('---') || t.startsWith('- ') || t.startsWith('* ')
+      || t.startsWith('>')) {
+      if (current.length > 30) break  // 已收集到足够内容，停止
+      current = ''
+      continue
     }
-  }, [activeTab])
+    current += (current ? ' ' : '') + t
+    if (current.length >= maxLen) break
+  }
+  if (current.length < 15) return null
+  return current.length > maxLen ? current.slice(0, maxLen) + '…' : current
+}
 
-  const topSkills = [...skills]
-    .map((s) => ({ ...s, deployCount: deployments.filter((d) => d.skill_id === s.id).length }))
-    .sort((a, b) => b.deployCount - a.deployCount)
-    .slice(0, 5)
+export default function SkillsStore() {
+  const { skills, fetchSkills, fetchDeployments } = useSkillStore()
+  const projects = useProjectStore((s) => s.projects)
 
-  const filtered = skills.filter((s) => {
-    const matchSearch = !searchQuery || s.name.toLowerCase().includes(searchQuery.toLowerCase()) || s.description.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchSource = sourceFilter === '全部' || s.source === sourceFilter
-    return matchSearch && matchSource
-  })
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searching, setSearching] = useState(false)
+  const [searchResults, setSearchResults] = useState<SkillsShSearchResult[]>([])
+  const [hasSearched, setHasSearched] = useState(false)
+  const [page, setPage] = useState(0)
 
-  const getDeployCount = (skillId: string) => deployments.filter((d) => d.skill_id === skillId).length
+  const [popularSkills, setPopularSkills] = useState<SkillsShSearchResult[]>([])
+  const [loadingPopular, setLoadingPopular] = useState(false)
 
-  const handleDeployConfirm = async (force = false) => {
-    if (!deployDialog || !selectedProject) return
-    setDeploying(deployDialog.skillId)
+  const [remoteUpdates, setRemoteUpdates] = useState<RemoteUpdateInfo[]>([])
+  const [checkingUpdates, setCheckingUpdates] = useState(false)
+
+  // 详情抽屉
+  const [detailSkill, setDetailSkill] = useState<SkillsShSearchResult | null>(null)
+  const [detailContent, setDetailContent] = useState<string | null>(null)
+  const [detailMeta, setDetailMeta] = useState<SkillMeta>({})
+  const [loadingDetail, setLoadingDetail] = useState(false)
+
+  // 卡片描述缓存：undefined = 未加载，null = 加载失败/无描述，string = 描述内容
+  const [descCache, setDescCache] = useState<Record<string, string | null>>({})
+  // 用 ref 跟踪正在加载中的 ID，避免重复请求同一个 skill
+  const loadingDescRef = useRef<Set<string>>(new Set())
+
+  // 安装对话框
+  const [installDialog, setInstallDialog] = useState<SkillsShSearchResult | null>(null)
+  const [installType, setInstallType] = useState<'db-only' | 'project' | 'global'>('db-only')
+  const [selectedProject, setSelectedProject] = useState('')
+  const [selectedTool, setSelectedTool] = useState<ToolName>('cursor')
+  const [installing, setInstalling] = useState<string | null>(null)
+
+  useEffect(() => {
+    loadPopular()
+    checkUpdates()
+  }, [])
+
+  // 切换搜索/浏览时重置分页
+  useEffect(() => { setPage(0) }, [hasSearched, searchResults, popularSkills])
+
+  const loadPopular = async () => {
+    setLoadingPopular(true)
     try {
-      console.log(`[SkillsStore] 部署 ${deployDialog.skillName} -> project=${selectedProject}, tool=${selectedTool}, force=${force}`)
-      const result = await deploymentsApi.deployToProject(deployDialog.skillId, selectedProject, selectedTool, force)
+      const result = await skillsShApi.browsePopular()
+      setPopularSkills(result.skills)
+    } catch { /* 网络不可用时静默失败 */ }
+    finally { setLoadingPopular(false) }
+  }
 
-      if (result.conflict) {
-        if (result.conflict.status === 'exists_same') {
-          await useSkillStore.getState().fetchDeployments()
-          toast.info(`${deployDialog.skillName} 在目标位置已存在且内容一致，已更新数据库记录`)
-          setDeployDialog(null)
-        } else if (result.conflict.status === 'exists_different') {
-          toast.warning(`目标位置已存在不同内容的 ${deployDialog.skillName}`, {
-            description: '点击"强制覆盖"用本地库版本覆盖目标，或取消操作',
-            action: {
-              label: '强制覆盖',
-              onClick: () => handleDeployConfirm(true),
-            },
-            duration: 10000,
-          })
+  const checkUpdates = async () => {
+    setCheckingUpdates(true)
+    try {
+      const updates = await skillsShApi.checkRemoteUpdates()
+      setRemoteUpdates(updates)
+    } catch { /* 静默失败 */ }
+    finally { setCheckingUpdates(false) }
+  }
+
+  // 分页计算（必须在 useEffect 之前声明，否则依赖数组引用会触发 TDZ 错误）
+  const displaySkills = hasSearched ? searchResults : popularSkills
+  const totalPages = Math.ceil(displaySkills.length / PAGE_SIZE)
+  // useMemo 保证引用稳定，防止 useEffect 在每次 render 都触发
+  const paginatedSkills = useMemo(
+    () => displaySkills.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+    [displaySkills, page]
+  )
+  const pendingUpdates = remoteUpdates.filter((u) => u.has_update)
+
+  // 当前页技能列表变化时，批量并发拉取尚未缓存的描述
+  useEffect(() => {
+    const toFetch = paginatedSkills.filter(
+      (s) => !(s.id in descCache) && !loadingDescRef.current.has(s.id)
+    )
+    if (toFetch.length === 0) return
+
+    toFetch.forEach((s) => loadingDescRef.current.add(s.id))
+
+    Promise.allSettled(
+      toFetch.map(async (skill) => {
+        const skillPath = skill.id.startsWith(skill.source + '/')
+          ? skill.id.slice(skill.source.length + 1)
+          : (skill.skill_id || skill.name || '').trim()
+        try {
+          const raw = await skillsShApi.fetchReadme(skill.source, skillPath)
+          const { meta, body } = parseFrontmatter(raw)
+          // 优先用 frontmatter description，为空时 fallback 到 body 第一段
+          const desc = (meta.description && meta.description.trim())
+            || extractBodySummary(body)
+            || null
+          return { id: skill.id, desc }
+        } catch {
+          return { id: skill.id, desc: null }
         }
-      } else {
-        console.log(`[SkillsStore] 部署完成: ${result.files_copied} 个文件`)
-        await useSkillStore.getState().fetchDeployments()
-        toast.success(`${deployDialog.skillName} 已部署到项目，共 ${result.files_copied} 个文件`)
-        setDeployDialog(null)
+      })
+    ).then((results) => {
+      const newDescs: Record<string, string | null> = {}
+      for (const r of results) {
+        if (r.status === 'fulfilled') newDescs[r.value.id] = r.value.desc
       }
+      setDescCache((prev) => ({ ...prev, ...newDescs }))
+      toFetch.forEach((s) => loadingDescRef.current.delete(s.id))
+    })
+  }, [paginatedSkills]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return
+    setSearching(true)
+    setHasSearched(true)
+    try {
+      const results = await skillsShApi.search(searchQuery.trim(), 60)
+      setSearchResults(results)
     } catch (e) {
-      console.error('[SkillsStore] 部署失败:', e)
-      toast.error('部署失败: ' + String(e))
+      toast.error('搜索失败: ' + String(e))
     } finally {
-      setDeploying(null)
+      setSearching(false)
+    }
+  }
+
+  const isInstalled = (skillName: string) =>
+    skills.some((s) => s.name.toLowerCase() === skillName.toLowerCase())
+
+  const getUpdateInfo = (skillName: string) =>
+    remoteUpdates.find((u) => u.skill_name.toLowerCase() === skillName.toLowerCase())
+
+  // 打开详情并懒加载 SKILL.md
+  // 从 skill.id（如 "vercel-labs/skills/find-skills"）和 skill.source（如 "vercel-labs/skills"）
+  // 推导出 skill_path（如 "find-skills"），然后直接走 raw.githubusercontent.com
+  // 不消耗 GitHub API 配额，避免匿名 60次/小时 的速率限制导致的静默失败
+  const handleOpenDetail = async (skill: SkillsShSearchResult) => {
+    setDetailSkill(skill)
+    setDetailContent(null)
+    setDetailMeta({})
+    setLoadingDetail(true)
+    try {
+      // skill.id 形如 "vercel-labs/skills/find-skills"
+      // skill.source 形如 "vercel-labs/skills"
+      // 推导 skillPath = "find-skills"
+      const skillPath = skill.id.startsWith(skill.source + '/')
+        ? skill.id.slice(skill.source.length + 1)
+        : (skill.skill_id || skill.name || '').trim()
+
+      console.log(`[SkillsStore] 加载 SKILL.md: ${skill.source}/${skillPath}`)
+      const rawContent = await skillsShApi.fetchReadme(skill.source, skillPath)
+
+      // 解析 YAML frontmatter，提取 description / triggers 等元信息
+      const { meta, body } = parseFrontmatter(rawContent)
+      console.log(`[SkillsStore] 解析 frontmatter:`, meta)
+      setDetailMeta(meta)
+      setDetailContent(body)
+    } catch (e) {
+      console.error('[SkillsStore] 加载 SKILL.md 失败:', e)
+    } finally {
+      setLoadingDetail(false)
+    }
+  }
+
+  const handleInstall = async () => {
+    if (!installDialog) return
+    const skill = installDialog
+    const id = toast.loading(`正在安装 ${skill.name}...`)
+    setInstalling(skill.id)
+    try {
+      const tree = await skillsShApi.getRepoTree(skill.source)
+      const effectiveName = (skill.skill_id || skill.name || '').trim()
+      const entry = tree.skills.find((s) => {
+        const parts = s.skill_path.split('/')
+        const name = parts[parts.length - 1]
+        return name === effectiveName || s.skill_path.endsWith(effectiveName)
+      })
+      if (!entry) {
+        toast.error(`未找到 Skill 文件: ${effectiveName}`, { id })
+        return
+      }
+
+      const deployTargets =
+        installType === 'project' && selectedProject
+          ? [{ project_id: selectedProject, tool: selectedTool }]
+          : installType === 'global'
+          ? [{ project_id: null, tool: selectedTool }]
+          : []
+
+      const result = await skillsShApi.install({
+        ownerRepo: skill.source,
+        skillPath: entry.skill_path,
+        skillName: entry.skill_path.split('/').pop() ?? skill.name,
+        folderSha: entry.folder_sha,
+        files: entry.files,
+        deployTargets,
+        forceOverwrite: false,
+      })
+
+      await fetchSkills()
+      await fetchDeployments()
+      const newUpdates = await skillsShApi.checkRemoteUpdates()
+      setRemoteUpdates(newUpdates)
+
+      const msg = deployTargets.length > 0
+        ? `${skill.name} 已安装到数据库并部署 ${result.deployments_created} 个位置`
+        : `${skill.name} 已安装到数据库`
+      toast.success(result.conflict ? `${skill.name} 已更新数据库记录（本地已存在）` : msg, { id })
+      setInstallDialog(null)
+    } catch (e) {
+      toast.error('安装失败: ' + String(e), { id })
+    } finally {
+      setInstalling(null)
+    }
+  }
+
+  const handleApplyUpdate = async (updateInfo: RemoteUpdateInfo) => {
+    const id = toast.loading(`正在更新 ${updateInfo.skill_name}...`)
+    try {
+      await skillsShApi.install({
+        ownerRepo: updateInfo.owner_repo,
+        skillPath: updateInfo.skill_path,
+        skillName: updateInfo.skill_name,
+        folderSha: updateInfo.remote_sha,
+        files: [],
+        deployTargets: [],
+        forceOverwrite: true,
+      })
+      await fetchSkills()
+      const newUpdates = await skillsShApi.checkRemoteUpdates()
+      setRemoteUpdates(newUpdates)
+      toast.success(`${updateInfo.skill_name} 已更新到数据库`, { id })
+    } catch (e) {
+      toast.error('更新失败: ' + String(e), { id })
     }
   }
 
   return (
-    <div className="space-y-6">
-      {/* 页面标题 */}
-      <div className="text-center space-y-2">
-        <h1 className="text-3xl font-display font-bold text-cream-800">Skill 仓库</h1>
-        <p className="text-cream-500">浏览在线 Skill 商城或管理本地 Skill 库</p>
+    <div className="space-y-5">
+      {/* 页头 */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-cream-800">商城</h1>
+          <p className="text-sm text-cream-500 mt-0.5">从 skills.sh 安装 Skill 到本地数据库</p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="rounded-xl gap-1.5"
+          onClick={checkUpdates}
+          disabled={checkingUpdates}
+        >
+          {checkingUpdates ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          检查已安装更新
+        </Button>
       </div>
 
-      {/* Tab 切换 */}
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="bg-cream-100 mx-auto flex w-fit">
-          <TabsTrigger value="store" className="gap-1.5">
-            <Globe className="h-4 w-4" /> skills.sh 商城
-          </TabsTrigger>
-          <TabsTrigger value="local" className="gap-1.5">
-            <HardDrive className="h-4 w-4" /> 本地 Skill 库
-          </TabsTrigger>
-          <TabsTrigger value="by-tool" className="gap-1.5">
-            <Wrench className="h-4 w-4" /> 按工具查看
-          </TabsTrigger>
-        </TabsList>
-
-        {/* skills.sh 商城 Tab */}
-        <TabsContent value="store" className="mt-6">
-          <SkillsShSearch />
-        </TabsContent>
-
-        {/* 按工具查看 Tab */}
-        <TabsContent value="by-tool" className="mt-6 space-y-6">
-          {loadingTools ? (
-            <div className="text-center py-12">
-              <Loader2 className="h-8 w-8 text-peach-400 animate-spin mx-auto" />
-              <p className="text-sm text-cream-500 mt-3">加载中...</p>
+      {/* 有更新提示栏 */}
+      {pendingUpdates.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 px-1">
+            <AlertCircle className="h-4 w-4 text-orange-500 shrink-0" />
+            <p className="text-sm text-orange-700 font-medium">
+              {pendingUpdates.length} 个已安装 Skill 有更新
+            </p>
+          </div>
+          {pendingUpdates.map((u) => (
+            <div key={u.skill_id} className="flex items-center gap-3 p-3 bg-orange-50 border border-orange-200 rounded-xl">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-cream-800">{u.skill_name}</p>
+                {u.locally_modified && (
+                  <p className="text-xs text-orange-600 mt-0.5">本地已修改，更新前会自动备份</p>
+                )}
+              </div>
+              <Badge variant="outline" className="text-[10px] bg-orange-50 text-orange-500 border-orange-200 shrink-0">
+                商城有更新
+              </Badge>
+              <Button
+                size="sm"
+                className="bg-orange-500 hover:bg-orange-600 text-white rounded-lg shrink-0"
+                onClick={() => handleApplyUpdate(u)}
+              >
+                应用更新
+              </Button>
             </div>
-          ) : toolGroups.length === 0 ? (
-            <div className="text-center py-16">
-              <div className="text-5xl mb-4">🛠️</div>
-              <h2 className="text-lg font-display font-bold text-cream-700 mb-2">暂无部署记录</h2>
-              <p className="text-cream-500">先将 Skill 部署到项目后，这里会按工具分组展示</p>
-            </div>
-          ) : (
-            toolGroups.map((group) => (
-              <div key={group.tool}>
-                <div className="flex items-center gap-3 mb-3">
-                  <Badge variant="outline" className="text-sm px-3 py-1 bg-lavender-50 text-lavender-500">
-                    {(toolNames as Record<string, string>)[group.tool] ?? group.tool}
-                  </Badge>
-                  <span className="text-xs text-cream-400">{group.count} 个部署</span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                  {group.skills.map((skill) => (
-                    <Card key={skill.deployment_id} className="border border-cream-200 shadow-card hover:shadow-card-hover transition-shadow">
-                      <CardContent className="p-4 space-y-2">
-                        <div className="flex items-start justify-between">
-                          <div className="min-w-0 flex-1">
-                            <h3 className="font-semibold text-cream-800 text-sm truncate">{skill.skill_name}</h3>
-                            {skill.skill_description && (
-                              <p className="text-xs text-cream-500 mt-0.5 line-clamp-1">{skill.skill_description}</p>
+          ))}
+        </div>
+      )}
+
+      {/* 搜索栏 */}
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-cream-400" />
+          <Input
+            placeholder="搜索 skills.sh 上的 Skill..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            className="pl-10 rounded-xl border-cream-300"
+          />
+        </div>
+        <Button
+          className="bg-peach-500 hover:bg-peach-600 text-white rounded-xl"
+          disabled={!searchQuery.trim() || searching}
+          onClick={handleSearch}
+        >
+          {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : '搜索'}
+        </Button>
+        {hasSearched && (
+          <Button
+            variant="outline"
+            className="rounded-xl"
+            onClick={() => { setHasSearched(false); setSearchQuery(''); setSearchResults([]) }}
+          >
+            清除
+          </Button>
+        )}
+      </div>
+
+      {/* Skill 列表 */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-cream-700 flex items-center gap-2">
+            <Globe className="h-4 w-4 text-cream-400" />
+            {hasSearched
+              ? `搜索结果（${searchResults.length}）`
+              : `热门 Skill（${popularSkills.length}）`}
+          </h2>
+          {totalPages > 1 && (
+            <span className="text-xs text-cream-400">
+              第 {page + 1} / {totalPages} 页
+            </span>
+          )}
+        </div>
+
+        {(loadingPopular || searching) && !hasSearched ? (
+          <div className="text-center py-16">
+            <Loader2 className="h-8 w-8 text-peach-400 animate-spin mx-auto" />
+            <p className="text-sm text-cream-400 mt-3">加载中...</p>
+          </div>
+        ) : displaySkills.length === 0 && hasSearched ? (
+          <div className="text-center py-16">
+            <p className="text-cream-400">没有找到匹配的 Skill，换个关键词试试</p>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {paginatedSkills.map((skill, i) => {
+                const installed = isInstalled(skill.name)
+                const updateInfo = getUpdateInfo(skill.name)
+                const hasUpdate = updateInfo?.has_update
+                // 从 source 解析仓库名显示
+                const repoParts = skill.source.split('/')
+                const repoName = repoParts.slice(0, 2).join('/')
+
+                const descLoading = !(skill.id in descCache)
+                const desc = descCache[skill.id]
+
+                return (
+                  <motion.div
+                    key={skill.id}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0, transition: { delay: i * 0.02 } }}
+                    className="h-full"
+                  >
+                    <Card
+                      className={cn(
+                        'border transition-all hover:shadow-md cursor-pointer h-full group flex flex-col',
+                        hasUpdate ? 'border-orange-200 bg-orange-50/30' : 'border-cream-200'
+                      )}
+                      onClick={() => handleOpenDetail(skill)}
+                    >
+                      <CardContent className="p-4 flex flex-col gap-3 h-full">
+
+                        {/* ── 第一行：名称 + 状态徽章 ── */}
+                        <div className="flex items-start justify-between gap-2">
+                          <h3 className="font-semibold text-cream-800 text-sm leading-snug group-hover:text-peach-600 transition-colors min-w-0 flex-1">
+                            {skill.name}
+                          </h3>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {installed && !hasUpdate && (
+                              <Badge variant="outline" className="text-[10px] bg-mint-50 text-mint-500 border-mint-200 px-1.5 h-5">
+                                <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" /> 已安装
+                              </Badge>
+                            )}
+                            {hasUpdate && (
+                              <Badge variant="outline" className="text-[10px] bg-orange-50 text-orange-500 border-orange-200 px-1.5 h-5">
+                                有更新
+                              </Badge>
                             )}
                           </div>
-                          <Badge
-                            variant="outline"
-                            className={cn('text-[10px] shrink-0 ml-2',
-                              skill.status === 'synced' ? 'bg-mint-50 text-mint-500' :
-                              skill.status === 'diverged' ? 'bg-honey-50 text-honey-500' :
-                              'bg-strawberry-50 text-strawberry-500'
-                            )}
+                        </div>
+
+                        {/* ── 第二行：描述（核心区域）── */}
+                        <div className="flex-1 min-h-[52px]">
+                          {descLoading ? (
+                            /* 骨架屏 */
+                            <div className="space-y-1.5 pt-0.5">
+                              <div className="h-3 bg-cream-200 rounded-full animate-pulse w-full" />
+                              <div className="h-3 bg-cream-200 rounded-full animate-pulse w-4/5" />
+                            </div>
+                          ) : desc ? (
+                            <p className="text-xs text-cream-600 leading-relaxed line-clamp-3">
+                              {desc}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-cream-300 italic leading-relaxed">
+                              暂无描述，点击查看详情
+                            </p>
+                          )}
+                        </div>
+
+                        {/* ── 第三行：来源 + 安装量 + 按钮 ── */}
+                        <div className="flex items-center justify-between pt-1 border-t border-cream-100">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[10px] text-cream-400 truncate">{repoName}</p>
+                            <p className="text-[10px] text-cream-300 flex items-center gap-0.5 mt-0.5">
+                              <Package className="h-2.5 w-2.5" />
+                              {skill.installs.toLocaleString()}
+                            </p>
+                          </div>
+                          <div
+                            className="flex gap-1.5 shrink-0"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            {skill.status === 'synced' ? '已同步' : skill.status === 'diverged' ? '已偏离' : skill.status}
-                          </Badge>
+                            {hasUpdate && updateInfo ? (
+                              <Button
+                                size="sm"
+                                className="text-xs h-7 bg-orange-500 hover:bg-orange-600 text-white rounded-lg"
+                                onClick={() => handleApplyUpdate(updateInfo)}
+                              >
+                                更新
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                className={cn(
+                                  'text-xs h-7 rounded-lg',
+                                  installed
+                                    ? 'bg-cream-100 text-cream-500 hover:bg-cream-200'
+                                    : 'bg-peach-500 hover:bg-peach-600 text-white'
+                                )}
+                                onClick={() => setInstallDialog(skill)}
+                              >
+                                <Download className="h-3 w-3 mr-1" />
+                                {installed ? '重装' : '安装'}
+                              </Button>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2 text-xs text-cream-400">
-                          {skill.project_name && <span className="truncate">{skill.project_name}</span>}
-                          <span className="font-mono truncate ml-auto text-[10px]">{skill.deploy_path.split('/').slice(-3).join('/')}</span>
-                        </div>
+
                       </CardContent>
                     </Card>
-                  ))}
-                </div>
-              </div>
-            ))
-          )}
-        </TabsContent>
+                  </motion.div>
+                )
+              })}
+            </div>
 
-        {/* 本地 Skill 库 Tab */}
-        <TabsContent value="local" className="mt-6 space-y-8">
-          {/* 搜索框 */}
-          <div className="relative max-w-lg mx-auto">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-cream-400" />
-            <Input
-              placeholder="搜索本地 Skill..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-12 h-12 rounded-full border-cream-300 shadow-card text-base"
-            />
-          </div>
-
-          {/* 高部署量排行 */}
-          {!searchQuery && topSkills.length > 0 && (
-            <div>
-              <h2 className="text-lg font-display font-bold text-cream-800 mb-4">部署最多的 Skill</h2>
-              <ScrollArea className="w-full">
-                <div className="flex gap-4 pb-4">
-                  {topSkills.map((skill, i) => {
-                    const src = sourceLabels[skill.source]
+            {/* 分页 */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-center gap-2 mt-6">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg"
+                  disabled={page === 0}
+                  onClick={() => setPage((p) => p - 1)}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <div className="flex gap-1">
+                  {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                    const pageIdx = totalPages <= 7 ? i
+                      : page < 4 ? i
+                      : page > totalPages - 5 ? totalPages - 7 + i
+                      : page - 3 + i
                     return (
-                      <motion.div
-                        key={skill.id}
-                        className="store-card shrink-0 w-64"
-                        whileHover={{ scale: 1.03, y: -4 }}
-                        transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                      <Button
+                        key={pageIdx}
+                        variant={page === pageIdx ? 'default' : 'outline'}
+                        size="sm"
+                        className={cn(
+                          'rounded-lg w-8 h-8 p-0 text-xs',
+                          page === pageIdx && 'bg-peach-500 hover:bg-peach-600 text-white border-peach-500'
+                        )}
+                        onClick={() => setPage(pageIdx)}
                       >
-                        <Card className="border border-cream-200 shadow-card hover:shadow-card-hover transition-shadow h-full">
-                          <CardContent className="p-4 space-y-3">
-                            <div className="flex items-center justify-between">
-                              <Badge variant="secondary" className="bg-peach-100 text-peach-700 text-xs">#{i + 1}</Badge>
-                              <Badge variant="outline" className={cn('text-xs', src.bg, src.text)}>{src.label}</Badge>
-                            </div>
-                            <h3 className="font-semibold text-cream-800">{skill.name}</h3>
-                            <p className="text-xs text-cream-500 line-clamp-2">{skill.description}</p>
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-cream-400">
-                                <Package className="h-3 w-3 inline mr-1" />{skill.deployCount} 个部署
-                              </span>
-                              <Button size="sm" className="text-xs h-7 bg-peach-500 hover:bg-peach-600 text-white"
-                                onClick={() => setDeployDialog({ skillId: skill.id, skillName: skill.name })}>
-                                <FolderOpen className="h-3 w-3 mr-1" /> 部署
-                              </Button>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      </motion.div>
+                        {pageIdx + 1}
+                      </Button>
                     )
                   })}
                 </div>
-                <ScrollBar orientation="horizontal" />
-              </ScrollArea>
-            </div>
-          )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg"
+                  disabled={page >= totalPages - 1}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
 
-          {/* 来源筛选 */}
-          <div className="flex gap-2 flex-wrap">
-            {sourceFilters.map((f) => (
-              <Button
-                key={f}
-                variant={sourceFilter === f ? 'default' : 'outline'}
-                size="sm"
-                className={cn(
-                  'rounded-full text-xs',
-                  sourceFilter === f ? 'bg-peach-500 hover:bg-peach-600 text-white' : 'border-cream-300'
-                )}
-                onClick={() => setSourceFilter(f)}
-              >
-                {f === '全部' ? '全部' : (sourceLabels as Record<string, { label: string }>)[f]?.label ?? f}
-              </Button>
-            ))}
-          </div>
+      {/* ── 详情侧边抽屉 ── */}
+      <Sheet open={!!detailSkill} onOpenChange={(open) => { if (!open) { setDetailSkill(null); setDetailMeta({}) } }}>
+        <SheetContent className="w-[480px] sm:max-w-[480px] flex flex-col gap-0 p-0 overflow-hidden">
+          {detailSkill && (
+            <>
+              <SheetHeader className="p-6 pb-4 border-b border-cream-200">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <SheetTitle className="text-xl font-display">{detailSkill.name}</SheetTitle>
+                    <SheetDescription className="mt-1 text-xs font-mono text-cream-400 truncate">
+                      {detailSkill.source}
+                    </SheetDescription>
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    {isInstalled(detailSkill.name) && (
+                      <Badge variant="outline" className="text-xs bg-mint-50 text-mint-500 border-mint-200">
+                        <CheckCircle2 className="h-3 w-3 mr-1" /> 已安装
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-4 text-xs text-cream-500 mt-2">
+                  <span className="flex items-center gap-1">
+                    <Package className="h-3 w-3" />
+                    {detailSkill.installs.toLocaleString()} 次安装
+                  </span>
+                  <a
+                    href={`https://skills.sh/${detailSkill.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-1 text-peach-500 hover:underline"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <ExternalLink className="h-3 w-3" /> 在 skills.sh 查看
+                  </a>
+                </div>
+              </SheetHeader>
 
-          {/* Skill 列表网格 */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {filtered.map((skill) => {
-              const src = sourceLabels[skill.source]
-              const depCount = getDeployCount(skill.id)
-              return (
-                <motion.div key={skill.id} className="category-card" whileHover={{ scale: 1.02 }}>
-                  <Card className="border border-cream-200 shadow-card hover:shadow-card-hover transition-shadow h-full">
-                    <CardContent className="p-5 space-y-3">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <h3 className="font-semibold text-cream-800">{skill.name}</h3>
-                          <p className="text-xs text-cream-500 mt-1">{skill.description}</p>
+              {/* SKILL.md 内容 */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-5">
+                {loadingDetail ? (
+                  <div className="text-center py-12">
+                    <Loader2 className="h-6 w-6 text-peach-400 animate-spin mx-auto" />
+                    <p className="text-sm text-cream-400 mt-2">加载 Skill 详情...</p>
+                    <p className="text-xs text-cream-300 mt-1">从 GitHub 获取 SKILL.md...</p>
+                  </div>
+                ) : (detailContent || detailMeta.description) ? (
+                  <>
+                    {/* ── 核心：description from frontmatter ── */}
+                    {detailMeta.description && (
+                      <div className="bg-peach-50 border border-peach-200 rounded-xl p-4">
+                        <p className="text-xs font-semibold text-peach-500 uppercase tracking-wide mb-1.5">适用场景</p>
+                        <p className="text-sm text-cream-800 leading-relaxed">{detailMeta.description}</p>
+                      </div>
+                    )}
+
+                    {/* ── triggers 关键词 ── */}
+                    {detailMeta.triggers && (
+                      <div>
+                        <p className="text-xs font-semibold text-cream-500 uppercase tracking-wide mb-2">触发关键词</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {detailMeta.triggers.split(',').map((t) => t.trim()).filter(Boolean).map((tag) => (
+                            <span key={tag} className="text-xs bg-lavender-100 text-lavender-500 px-2 py-0.5 rounded-full">
+                              {tag}
+                            </span>
+                          ))}
                         </div>
-                        {skill.version && (
-                          <Badge variant="outline" className="bg-lavender-50 text-lavender-400 text-xs shrink-0">
-                            v{skill.version}
-                          </Badge>
+                      </div>
+                    )}
+
+                    {/* ── 元信息 ── */}
+                    {(detailMeta.domain || detailMeta.author || detailMeta.version) && (
+                      <div className="grid grid-cols-3 gap-2 text-xs">
+                        {detailMeta.domain && (
+                          <div className="bg-cream-50 rounded-lg p-2 text-center">
+                            <p className="text-cream-400">领域</p>
+                            <p className="font-medium text-cream-700 mt-0.5">{detailMeta.domain}</p>
+                          </div>
+                        )}
+                        {detailMeta.version && (
+                          <div className="bg-cream-50 rounded-lg p-2 text-center">
+                            <p className="text-cream-400">版本</p>
+                            <p className="font-medium text-cream-700 mt-0.5">{detailMeta.version}</p>
+                          </div>
+                        )}
+                        {detailMeta.author && (
+                          <div className="bg-cream-50 rounded-lg p-2 text-center">
+                            <p className="text-cream-400">作者</p>
+                            <p className="font-medium text-cream-700 mt-0.5 truncate">
+                              {detailMeta.author.split('/').pop()}
+                            </p>
+                          </div>
                         )}
                       </div>
-                      <div className="flex items-center justify-between pt-2">
-                        <div className="flex items-center gap-3">
-                          <Badge variant="outline" className={cn('text-xs', src?.bg, src?.text)}>{src?.label ?? skill.source}</Badge>
-                          <span className="text-xs text-cream-400"><Package className="h-3 w-3 inline mr-1" />{depCount} 个部署</span>
+                    )}
+
+                    {/* ── SKILL.md 正文（frontmatter 之后的内容）── */}
+                    {detailContent && (
+                      <div>
+                        <div className="flex items-center gap-1.5 text-xs text-cream-400 mb-3 border-t border-cream-100 pt-4">
+                          <FileText className="h-3.5 w-3.5" /> SKILL.md 完整内容
                         </div>
-                        <Button size="sm" className="text-xs h-7 bg-peach-500 hover:bg-peach-600 text-white"
-                          onClick={() => setDeployDialog({ skillId: skill.id, skillName: skill.name })}
-                          disabled={deploying === skill.id}>
-                          <Download className="h-3 w-3 mr-1" /> {deploying === skill.id ? '部署中...' : '部署到项目'}
-                        </Button>
+                        <div className="text-sm text-cream-700 leading-relaxed space-y-2">
+                          {detailContent.split('\n').map((line, idx) => {
+                            if (line.startsWith('# ')) return (
+                              <h2 key={idx} className="text-base font-bold text-cream-800 mt-4 first:mt-0">{line.slice(2)}</h2>
+                            )
+                            if (line.startsWith('## ')) return (
+                              <h3 key={idx} className="text-sm font-semibold text-cream-700 mt-3 border-b border-cream-100 pb-1">{line.slice(3)}</h3>
+                            )
+                            if (line.startsWith('### ')) return (
+                              <h4 key={idx} className="text-xs font-semibold text-cream-600 mt-2">{line.slice(4)}</h4>
+                            )
+                            if (line.startsWith('- ') || line.startsWith('* ')) return (
+                              <div key={idx} className="flex gap-2 text-sm text-cream-600">
+                                <span className="text-peach-400 shrink-0 mt-0.5">•</span>
+                                <span>{line.slice(2)}</span>
+                              </div>
+                            )
+                            if (line.startsWith('```')) return (
+                              <div key={idx} className="text-xs font-mono text-cream-500 bg-cream-100 rounded px-2 py-0.5">{line}</div>
+                            )
+                            if (line.trim() === '') return <div key={idx} className="h-1" />
+                            return <p key={idx} className="text-sm text-cream-700">{line}</p>
+                          })}
+                        </div>
                       </div>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              )
-            })}
-          </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-center py-12">
+                    <FileText className="h-8 w-8 text-cream-300 mx-auto mb-2" />
+                    <p className="text-sm text-cream-400">无法加载 Skill 详情</p>
+                    <p className="text-xs text-cream-300 mt-1 mb-3">可能是网络问题或该 Skill 暂无 SKILL.md</p>
+                    <a
+                      href={`https://skills.sh/${detailSkill.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-peach-500 hover:underline inline-flex items-center gap-1"
+                    >
+                      <ExternalLink className="h-3 w-3" /> 在 skills.sh 查看完整说明
+                    </a>
+                  </div>
+                )}
+              </div>
 
-          {filtered.length === 0 && (
-            <div className="text-center py-16">
-              <div className="text-5xl mb-4">🔍</div>
-              <h2 className="text-lg font-display font-bold text-cream-700 mb-2">没有找到匹配的 Skill</h2>
-              <p className="text-cream-500">试试其他关键词或来源筛选</p>
-            </div>
+              {/* 底部操作 */}
+              <div className="p-4 border-t border-cream-200 flex gap-2">
+                {getUpdateInfo(detailSkill.name)?.has_update ? (
+                  <Button
+                    className="flex-1 bg-orange-500 hover:bg-orange-600 text-white rounded-xl"
+                    onClick={() => {
+                      const u = getUpdateInfo(detailSkill.name)
+                      if (u) { handleApplyUpdate(u); setDetailSkill(null) }
+                    }}
+                  >
+                    应用商城更新到数据库
+                  </Button>
+                ) : (
+                  <Button
+                    className="flex-1 bg-peach-500 hover:bg-peach-600 text-white rounded-xl"
+                    onClick={() => { setInstallDialog(detailSkill); setDetailSkill(null) }}
+                  >
+                    <Download className="h-4 w-4 mr-1" />
+                    {isInstalled(detailSkill.name) ? '重新安装' : '安装到数据库'}
+                  </Button>
+                )}
+              </div>
+            </>
           )}
-        </TabsContent>
-      </Tabs>
+        </SheetContent>
+      </Sheet>
 
-      {/* 部署对话框 */}
-      <Dialog open={!!deployDialog} onOpenChange={() => setDeployDialog(null)}>
+      {/* ── 安装对话框 ── */}
+      <Dialog open={!!installDialog} onOpenChange={(open) => !open && setInstallDialog(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>部署 {deployDialog?.skillName} 到项目</DialogTitle>
-            <DialogDescription>选择目标项目和工具，将 Skill 文件复制到项目目录中。</DialogDescription>
+            <DialogTitle className="flex items-center gap-2">
+              <Download className="h-5 w-5" /> 安装 {installDialog?.name}
+            </DialogTitle>
+            <DialogDescription>
+              商城 → 数据库。选择是否同时部署到项目或工具全局目录。
+            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-cream-700">目标项目</label>
-              <Select value={selectedProject} onValueChange={setSelectedProject}>
-                <SelectTrigger className="border-cream-300"><SelectValue placeholder="选择项目" /></SelectTrigger>
-                <SelectContent>
-                  {projects.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name} <span className="text-cream-400 text-xs ml-2">{p.path}</span></SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+
+          <div className="space-y-4">
+            {/* 安装范围 */}
+            <div>
+              <label className="text-sm font-medium text-cream-700 mb-2 block">安装范围</label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { value: 'db-only', label: '仅数据库', desc: '不部署文件' },
+                  { value: 'project', label: '部署到项目', desc: '选择项目+工具' },
+                  { value: 'global', label: '部署到全局', desc: '工具全局目录' },
+                ].map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setInstallType(opt.value as typeof installType)}
+                    className={cn(
+                      'p-2.5 rounded-xl border-2 text-xs text-left transition-all',
+                      installType === opt.value
+                        ? 'border-peach-400 bg-peach-50 text-peach-700'
+                        : 'border-cream-200 text-cream-600 hover:border-peach-200'
+                    )}
+                  >
+                    <p className="font-medium">{opt.label}</p>
+                    <p className="opacity-70 mt-0.5">{opt.desc}</p>
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-cream-700">目标工具</label>
-              <Select value={selectedTool} onValueChange={(v) => setSelectedTool(v as ToolName)}>
-                <SelectTrigger className="border-cream-300"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {TOOLS.map((t) => (
-                    <SelectItem key={t} value={t}>{toolNames[t]}</SelectItem>
+
+            {installType === 'project' && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-cream-700">目标项目</label>
+                <Select value={selectedProject} onValueChange={setSelectedProject}>
+                  <SelectTrigger className="border-cream-300"><SelectValue placeholder="选择项目" /></SelectTrigger>
+                  <SelectContent>
+                    {projects.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {(installType === 'project' || installType === 'global') && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-cream-700">目标工具</label>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {TOOLS.map((tool) => (
+                    <button
+                      key={tool}
+                      onClick={() => setSelectedTool(tool)}
+                      className={cn(
+                        'flex flex-col items-center gap-1 py-2 rounded-lg border-2 text-[10px] transition-all',
+                        selectedTool === tool
+                          ? 'border-peach-400 bg-peach-50 text-peach-700'
+                          : 'border-cream-200 text-cream-500 hover:border-peach-200'
+                      )}
+                    >
+                      <ToolIcon tool={tool} size={20} />
+                      {toolNames[tool]}
+                    </button>
                   ))}
-                </SelectContent>
-              </Select>
-            </div>
+                </div>
+              </div>
+            )}
           </div>
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeployDialog(null)}>取消</Button>
+            <Button variant="outline" onClick={() => setInstallDialog(null)}>取消</Button>
             <Button
               className="bg-peach-500 hover:bg-peach-600 text-white"
-              disabled={!selectedProject || deploying === deployDialog?.skillId}
-              onClick={() => handleDeployConfirm()}
+              disabled={
+                installing !== null ||
+                (installType === 'project' && !selectedProject)
+              }
+              onClick={handleInstall}
             >
-              {deploying ? '部署中...' : '确认部署'}
+              {installing !== null
+                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> 安装中...</>
+                : '确认安装到数据库'}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -103,19 +103,27 @@ pub async fn save_git_export_config(
 ) -> Result<GitExportConfig, AppError> {
     info!("[save_git_export_config] 保存 Git 配置: provider={}, url={}", provider, remote_url);
     let conn = pool.get()?;
-    let id = Uuid::new_v4().to_string();
+    let new_id = Uuid::new_v4().to_string();
 
+    // 用 remote_url 作为幂等键：存在则更新，不存在则插入
     conn.execute(
         "INSERT INTO git_export_config (id, provider, remote_url, auth_type, branch, auto_export)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, provider, remote_url, auth_type, branch, auto_export],
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(remote_url) DO UPDATE SET
+             provider    = excluded.provider,
+             auth_type   = excluded.auth_type,
+             branch      = excluded.branch,
+             auto_export = excluded.auto_export,
+             updated_at  = datetime('now')",
+        params![new_id, provider, remote_url, auth_type, branch, auto_export],
     )?;
 
+    // 查询实际写入的记录（可能是已有记录的 id）
     let config = conn.query_row(
         "SELECT id, provider, remote_url, auth_type, branch, auto_export,
                 last_push_at, last_pull_at, created_at, updated_at
-         FROM git_export_config WHERE id = ?1",
-        params![id],
+         FROM git_export_config WHERE remote_url = ?1",
+        params![remote_url],
         |row| Ok(GitExportConfig {
             id: row.get(0)?,
             provider: row.get(1)?,

@@ -31,12 +31,11 @@ export default function SkillEditor() {
   const [discardOpen, setDiscardOpen] = useState(false)
   const [frontmatterOpen, setFrontmatterOpen] = useState(true)
   const [hasChanges, setHasChanges] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [_loading, setLoading] = useState(true)
 
   useState(() => {
-    if (skill?.local_path) {
-      const mdPath = skill.local_path + '/SKILL.md'
-      skillsApi.readFile(mdPath).then((text) => {
+    if (skill?.id) {
+      skillsApi.readFile(skill.id, 'SKILL.md').then((text) => {
         setContent(text)
         setLoading(false)
       }).catch(() => {
@@ -61,9 +60,8 @@ export default function SkillEditor() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      if (skill?.local_path) {
-        const mdPath = skill.local_path + '/SKILL.md'
-        await skillsApi.writeFile(mdPath, content)
+      if (skill?.id) {
+        await skillsApi.writeFile(skill.id, 'SKILL.md', content)
       }
       setSaving(false)
       setHasChanges(false)
