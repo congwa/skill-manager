@@ -12,10 +12,16 @@ pub async fn get_projects(pool: State<'_, DbPool>) -> Result<Vec<Project>, AppEr
     info!("[get_projects] 查询所有项目");
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT p.id, p.name, p.path, p.status, p.last_scanned,
+        "SELECT p.id, p.name, p.path, p.last_scanned,
                 COUNT(DISTINCT sd.skill_id) AS skill_count,
                 COUNT(DISTINCT sd.tool) AS tool_count,
-                p.created_at, p.updated_at
+                p.created_at, p.updated_at,
+                -- 实时推导：有 diverged/missing → changed；全 synced → synced；无部署 → unsynced
+                CASE
+                    WHEN COUNT(sd.id) = 0 THEN 'unsynced'
+                    WHEN SUM(CASE WHEN sd.status IN ('diverged','missing') THEN 1 ELSE 0 END) > 0 THEN 'changed'
+                    ELSE 'synced'
+                END AS computed_status
          FROM projects p
          LEFT JOIN skill_deployments sd ON sd.project_id = p.id
          GROUP BY p.id ORDER BY p.name"
@@ -26,12 +32,12 @@ pub async fn get_projects(pool: State<'_, DbPool>) -> Result<Vec<Project>, AppEr
             id: row.get(0)?,
             name: row.get(1)?,
             path: row.get(2)?,
-            status: row.get(3)?,
-            last_scanned: row.get(4)?,
-            skill_count: row.get(5)?,
-            tool_count: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+            status: row.get(8)?,   // computed_status
+            last_scanned: row.get(3)?,
+            skill_count: row.get(4)?,
+            tool_count: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
         })
     })?.collect::<Result<Vec<_>, _>>()?;
 
@@ -67,19 +73,19 @@ pub async fn add_project(path: String, pool: State<'_, DbPool>) -> Result<Projec
     })?;
 
     let project = conn.query_row(
-        "SELECT id, name, path, status, last_scanned, 0, 0, created_at, updated_at
+        "SELECT id, name, path, last_scanned, created_at, updated_at
          FROM projects WHERE id = ?1",
         params![id],
         |row| Ok(Project {
             id: row.get(0)?,
             name: row.get(1)?,
             path: row.get(2)?,
-            status: row.get(3)?,
-            last_scanned: row.get(4)?,
-            skill_count: row.get(5)?,
-            tool_count: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+            status: "unsynced".to_string(), // 新建项目无部署
+            last_scanned: row.get(3)?,
+            skill_count: 0,
+            tool_count: 0,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
         }),
     )?;
 
@@ -137,19 +143,19 @@ pub async fn batch_add_projects(
         ) {
             Ok(_) => {
                 let project = conn.query_row(
-                    "SELECT id, name, path, status, last_scanned, 0, 0, created_at, updated_at
+                    "SELECT id, name, path, last_scanned, created_at, updated_at
                      FROM projects WHERE id = ?1",
                     params![id],
                     |row| Ok(Project {
                         id: row.get(0)?,
                         name: row.get(1)?,
                         path: row.get(2)?,
-                        status: row.get(3)?,
-                        last_scanned: row.get(4)?,
-                        skill_count: row.get(5)?,
-                        tool_count: row.get(6)?,
-                        created_at: row.get(7)?,
-                        updated_at: row.get(8)?,
+                        status: "unsynced".to_string(), // 新建项目无部署
+                        last_scanned: row.get(3)?,
+                        skill_count: 0,
+                        tool_count: 0,
+                        created_at: row.get(4)?,
+                        updated_at: row.get(5)?,
                     }),
                 )?;
                 info!("[batch_add_projects]   添加成功: {} ({})", name, path);

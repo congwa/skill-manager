@@ -8,110 +8,6 @@ use db::pool;
 use log::info;
 use tauri::Manager;
 
-/// 启动时一次性迁移：将存量 local_path 的文件内容导入 skill_files 表
-/// 仅处理 skill_files 中没有记录但 local_path 有效的 Skill
-fn migrate_legacy_local_paths(pool: &db::DbPool) {
-    info!("[startup-migration] 开始检查存量 local_path 数据...");
-
-    let conn = match pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("[startup-migration] 获取 DB 连接失败: {}", e);
-            return;
-        }
-    };
-
-    // 查询有 local_path 但 skill_files 中没有文件的 Skill
-    let skills: Vec<(String, String, String)> = {
-        match conn.prepare(
-            "SELECT s.id, s.name, s.local_path
-             FROM skills s
-             WHERE s.local_path IS NOT NULL AND s.local_path != ''
-               AND NOT EXISTS (
-                   SELECT 1 FROM skill_files sf WHERE sf.skill_id = s.id
-               )"
-        ) {
-            Err(e) => {
-                log::warn!("[startup-migration] 准备查询失败: {}", e);
-                return;
-            }
-            Ok(mut stmt) => {
-                match stmt.query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                }) {
-                    Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-                    Err(e) => {
-                        log::warn!("[startup-migration] 查询失败: {}", e);
-                        return;
-                    }
-                }
-            }
-        }
-    };
-
-    if skills.is_empty() {
-        info!("[startup-migration] 无需迁移（所有 Skill 已有 DB 文件或无 local_path）");
-        return;
-    }
-
-    info!("[startup-migration] 发现 {} 个 Skill 需要迁移", skills.len());
-
-    let mut migrated = 0usize;
-    for (skill_id, name, local_path) in &skills {
-        let dir = std::path::Path::new(local_path);
-        if !dir.exists() || !dir.is_dir() {
-            info!("[startup-migration] {} local_path 不存在，跳过: {}", name, local_path);
-
-            // 尝试从部署目录补救
-            let fallback: Option<String> = conn.query_row(
-                "SELECT path FROM skill_deployments WHERE skill_id = ?1 AND path IS NOT NULL ORDER BY last_synced DESC LIMIT 1",
-                rusqlite::params![skill_id],
-                |row| row.get(0),
-            ).ok();
-
-            if let Some(dp) = fallback {
-                let dp_path = std::path::Path::new(&dp);
-                if dp_path.exists() {
-                    info!("[startup-migration] {} 回退到 deploy_path: {}", name, dp);
-                    match commands::skill_files::db_import_from_dir(&conn, skill_id, dp_path) {
-                        Ok(n) => {
-                            let cs = commands::skill_files::compute_db_checksum(&conn, skill_id);
-                            let _ = conn.execute(
-                                "UPDATE skills SET checksum = ?1 WHERE id = ?2",
-                                rusqlite::params![cs, skill_id],
-                            );
-                            info!("[startup-migration] {} 从部署目录迁移了 {} 个文件", name, n);
-                            migrated += 1;
-                        }
-                        Err(e) => info!("[startup-migration] {} 部署目录迁移失败: {}", name, e),
-                    }
-                }
-            }
-            continue;
-        }
-
-        match commands::skill_files::db_import_from_dir(&conn, skill_id, dir) {
-            Ok(n) => {
-                let cs = commands::skill_files::compute_db_checksum(&conn, skill_id);
-                let _ = conn.execute(
-                    "UPDATE skills SET checksum = ?1 WHERE id = ?2",
-                    rusqlite::params![cs, skill_id],
-                );
-                info!("[startup-migration] 迁移 '{}': {} 个文件", name, n);
-                migrated += 1;
-            }
-            Err(e) => {
-                info!("[startup-migration] 迁移 '{}' 失败: {}", name, e);
-            }
-        }
-    }
-
-    info!("[startup-migration] 迁移完成: {} / {} 个 Skill", migrated, skills.len());
-}
 
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -127,9 +23,6 @@ pub fn run() {
     info!("[启动] 数据库连接池创建成功");
 
     info!("[启动] 构建 Tauri 应用...");
-    // 启动时一次性存量数据迁移（将老的 local_path 文件内容导入 skill_files 表）
-    migrate_legacy_local_paths(&db_pool);
-
     let watcher_pool = db_pool.clone();
     let scan_pool = db_pool.clone();
     tauri::Builder::default()
@@ -194,9 +87,9 @@ pub fn run() {
             commands::skills::read_skill_file,
             commands::skills::write_skill_file,
             commands::skills::list_skill_files,
-            commands::skills::export_skill_to_local,
-            commands::skills::open_skill_in_editor,
             commands::skills::check_skill_updates,
+            commands::skills::dismiss_watcher_change,
+            commands::skills::discard_watcher_change,
             commands::skills::update_skill_from_library,
             commands::skills::restore_from_backup,
             commands::skills::compute_skill_diff,
@@ -224,12 +117,10 @@ pub fn run() {
             commands::settings::get_git_export_configs,
             commands::settings::save_git_export_config,
             commands::settings::delete_git_export_config,
-            commands::settings::get_change_events,
-            commands::settings::resolve_change_event,
-            commands::settings::get_sync_history,
             commands::settings::get_app_init_status,
             commands::settings::initialize_app,
             commands::settings::reset_app,
+            commands::settings::open_devtools,
             // Scanner
             commands::scanner::scan_project,
             commands::scanner::scan_and_import_project,
@@ -241,15 +132,16 @@ pub fn run() {
             commands::git::import_from_git_repo,
             commands::git::check_git_repo_updates,
             commands::git::scan_remote_new_skills,
-            // skills.sh
-            commands::skillssh::search_skills_sh,
-            commands::skillssh::get_skill_repo_tree,
-            commands::skillssh::fetch_skill_content,
-            commands::skillssh::fetch_skill_readme,
-            commands::skillssh::install_from_skills_sh,
-            commands::skillssh::check_remote_updates,
-            commands::skillssh::browse_popular_skills_sh,
-            commands::skillssh::get_skill_categories,
+            // Catalog (dmgrok)
+            commands::catalog::fetch_catalog,
+            commands::catalog::search_catalog,
+            commands::catalog::enrich_single_install,
+            commands::catalog::enrich_batch_by_category,
+            commands::catalog::install_from_catalog,
+            commands::catalog::check_catalog_updates,
+            // skills.sh 直连搜索与安装
+            commands::catalog::search_skills_sh,
+            commands::catalog::install_from_skills_sh,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

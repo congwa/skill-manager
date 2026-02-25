@@ -1,7 +1,7 @@
 {
     "$schema": "./gen/schemas/desktop-schema.json",
     "productName": "Skills Manager",
-    "version": "0.1.0",
+    "version": "1.0.1",
     "identifier": "com.congwa.skills-manager",
     "build": {
         "devUrl": "http://localhost:5173",
@@ -22,7 +22,7 @@
             }
         ],
         "security": {
-            "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:",
+            "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; frame-src https://skills.sh",
             "capabilities": ["default"]
         }
     },

@@ -1,6 +1,6 @@
 use log::info;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -8,24 +8,16 @@ use uuid::Uuid;
 use tauri::AppHandle;
 use tauri::Emitter;
 
-use super::skill_files::{db_delete_file, db_write_file, refresh_skill_checksum};
+use super::skill_files::{db_delete_file, db_export_to_dir, db_write_file, has_db_files, refresh_skill_checksum};
 use super::utils::compute_dir_checksum;
 use crate::db::DbPool;
 use crate::tools::ALL_TOOLS;
 
-/// 收集所有需要监听的目录
+/// 收集所有需要监听的目录（仅部署目录，DB 为单一数据源）
 fn collect_watch_paths(pool: &DbPool) -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
-    // 1. Skill 库写出缓存目录（用于编辑器打开后同步回 DB）
-    if let Some(home) = dirs::home_dir() {
-        let lib_path = home.join(".skills-manager").join("skills");
-        if lib_path.exists() {
-            paths.push(lib_path);
-        }
-    }
-
-    // 2. 所有项目的工具 Skill 目录
+    // 所有项目的工具 Skill 目录
     if let Ok(conn) = pool.get() {
         if let Ok(mut stmt) = conn.prepare("SELECT path FROM projects") {
             if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
@@ -74,6 +66,50 @@ fn resolve_skill_for_file(
     None
 }
 
+/// 写入 DB 前自动备份当前 skill 内容，返回备份 ID（可用于"放弃并还原"）
+fn auto_backup_before_watcher(conn: &Connection, skill_id: &str) -> Option<String> {
+    if !has_db_files(conn, skill_id) {
+        return None;
+    }
+    let skill_name: String = conn
+        .query_row("SELECT name FROM skills WHERE id = ?1", params![skill_id], |r| r.get(0))
+        .ok()?;
+    let home = dirs::home_dir()?;
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S%3f").to_string();
+    let backup_path = home
+        .join(".skills-manager")
+        .join("backups")
+        .join(&skill_name)
+        .join(format!("watcher-auto-{}", timestamp));
+
+    let old_checksum: Option<String> = conn
+        .query_row("SELECT checksum FROM skills WHERE id = ?1", params![skill_id], |r| r.get(0))
+        .ok()
+        .flatten();
+
+    match db_export_to_dir(conn, skill_id, &backup_path) {
+        Ok(_) => {
+            let bid = Uuid::new_v4().to_string();
+            let bp_str = backup_path.to_string_lossy().to_string();
+            let ok = conn.execute(
+                "INSERT INTO skill_backups (id, skill_id, version_label, backup_path, checksum, reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'watcher_auto')",
+                params![bid, skill_id, timestamp, bp_str, old_checksum],
+            ).is_ok();
+            if ok {
+                info!("[watcher] 自动备份完成: {}", bp_str);
+                Some(bid)
+            } else {
+                None
+            }
+        }
+        Err(e) => {
+            info!("[watcher] 自动备份失败（继续写入）: {}", e);
+            None
+        }
+    }
+}
+
 /// 处理文件变更事件，回写到 skill_files DB 并写入 change_events
 fn handle_fs_event(event: &Event, pool: &DbPool, app_handle: &AppHandle) {
     let event_type = match event.kind {
@@ -101,6 +137,21 @@ fn handle_fs_event(event: &Event, pool: &DbPool, app_handle: &AppHandle) {
             if let Some((dep_id, skill_id, rel_path)) =
                 resolve_skill_for_file(pool, &path_str)
             {
+                // ── 写入前自动备份（仅首次变更，已有 watcher_modified_at 时跳过重复备份）──
+                let existing_backup_id: Option<String> = conn
+                    .query_row(
+                        "SELECT watcher_backup_id FROM skills WHERE id = ?1",
+                        params![skill_id],
+                        |row| row.get(0),
+                    )
+                    .ok()
+                    .flatten();
+                let backup_id = if existing_backup_id.is_none() {
+                    auto_backup_before_watcher(&conn, &skill_id)
+                } else {
+                    existing_backup_id
+                };
+
                 // ── 回写到 DB skill_files ──
                 let mut write_succeeded = false;
                 match event_type {
@@ -128,6 +179,17 @@ fn handle_fs_event(event: &Event, pool: &DbPool, app_handle: &AppHandle) {
                         }
                     }
                     _ => {}
+                }
+
+                // ── 设置 watcher 三字段 ──
+                if write_succeeded {
+                    let _ = conn.execute(
+                        "UPDATE skills SET watcher_modified_at = datetime('now'),
+                         watcher_backup_id = ?1, watcher_trigger_dep_id = ?2
+                         WHERE id = ?3",
+                        params![backup_id, dep_id, skill_id],
+                    );
+                    info!("[watcher] 已设置 watcher 字段: skill={}", skill_id);
                 }
 
                 // ── 同步更新 skill_deployments.checksum 和 status ──

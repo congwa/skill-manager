@@ -1,4 +1,4 @@
-pub mod migrations;
+pub mod schema;
 pub mod pool;
 
 pub use pool::DbPool;

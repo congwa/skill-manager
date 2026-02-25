@@ -3,10 +3,6 @@ export type ToolName = string
 
 export type DeploymentStatus = 'synced' | 'diverged' | 'missing' | 'untracked' | 'pending'
 export type SkillSource = 'local' | 'skills-sh' | 'github' | 'gitee'
-export type ChangeEventType = 'modified' | 'created' | 'deleted' | 'renamed'
-export type EventStatus = 'pending' | 'resolved' | 'ignored'
-export type SyncActionType = 'deploy' | 'update' | 'delete' | 'export' | 'import'
-
 export interface Project {
   id: string
   name: string
@@ -25,12 +21,16 @@ export interface Skill {
   version: string
   source: SkillSource
   source_url?: string
-  /** @deprecated DB 是权威源，local_path 不再保证有效，请使用 skill_id 访问文件 */
-  local_path?: string
   checksum: string
   tags: string[]
   last_modified_at: string
   created_at: string
+  /** Watcher 检测到变更并写入 DB 的时间，null 表示无待处理变更 */
+  watcher_modified_at: string | null
+  /** 写入前自动备份的 backup ID，用于"放弃并还原" */
+  watcher_backup_id: string | null
+  /** 触发此次 watcher 变更的 deployment ID */
+  watcher_trigger_dep_id: string | null
 }
 
 export interface SkillDeployment {
@@ -44,27 +44,6 @@ export interface SkillDeployment {
   last_synced_at: string
 }
 
-export interface ChangeEvent {
-  id: string
-  skill_name: string
-  project_name: string
-  tool_name: ToolName
-  event_type: ChangeEventType
-  status: EventStatus
-  detected_at: string
-  file_path: string
-}
-
-export interface SyncHistory {
-  id: string
-  action_type: SyncActionType
-  skill_name: string
-  project_name?: string
-  tool_name?: ToolName
-  result: 'success' | 'failed'
-  error_message?: string
-  created_at: string
-}
 
 export interface SkillBackup {
   id: string

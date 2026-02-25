@@ -3,9 +3,9 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import {
   ArrowLeft, Edit, RefreshCw, MoreHorizontal,
-  Trash2, FileText, MapPin, GitBranch, Folder,
-  ExternalLink, Plus, Clock, Loader2, Download,
-  UploadCloud, CheckCircle2, AlertTriangle, Info,
+  Trash2, FileText, MapPin, GitBranch, Folder, FolderOpen,
+  Plus, Clock, Loader2, Download,
+  UploadCloud, CheckCircle2, AlertTriangle, Info, ChevronRight, ChevronDown, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -32,7 +32,7 @@ import { cn, toolNames, statusColors, sourceLabels, relativeTime } from '@/lib/u
 import { ToolIcon } from '@/components/ui/ToolIcon'
 import { ALL_TOOLS } from '@/lib/tools'
 import { toast } from 'sonner'
-import { skillsApi, deploymentsApi, gitApi, skillsShApi } from '@/lib/tauri-api'
+import { skillsApi, deploymentsApi, gitApi, catalogApi } from '@/lib/tauri-api'
 import type { RemoteUpdateInfo, GitRepoUpdateInfo } from '@/lib/tauri-api'
 import type { ToolName } from '@/types'
 
@@ -49,6 +49,10 @@ export default function SkillDetail() {
   const [activeTab, setActiveTab] = useState('overview')
   const [skillContent, setSkillContent] = useState<string | null>(null)
   const [skillFiles, setSkillFiles] = useState<string[]>([])
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
+  const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  const [selectedFileContent, setSelectedFileContent] = useState<string | null>(null)
+  const [loadingFile, setLoadingFile] = useState(false)
   const [restoring, setRestoring] = useState<string | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -126,15 +130,13 @@ export default function SkillDetail() {
     }
   }
 
-  const handleBatchDelete = async (withLocalLib: boolean) => {
+  const handleBatchDelete = async () => {
     setDeleting(true)
     try {
-      const result = await skillsApi.batchDelete(skillId!, withLocalLib)
+      const result = await skillsApi.batchDelete(skillId!)
       await fetchSkills()
       await fetchDeployments()
-      toast.success(
-        `${result.skill_name} 已删除: ${result.deployments_deleted} 个部署${result.local_lib_removed ? ' + 本地库' : ''}`
-      )
+      toast.success(`${result.skill_name} 已删除: ${result.deployments_deleted} 个部署`)
       navigate('/skills')
     } catch (e) {
       toast.error('删除失败: ' + String(e))
@@ -176,7 +178,7 @@ export default function SkillDetail() {
     setCheckingSync(true)
     try {
       const [updates, gitUpdates] = await Promise.allSettled([
-        skillsShApi.checkRemoteUpdates(),
+        catalogApi.checkUpdates(),
         gitApi.checkRepoUpdates(),
       ])
       if (updates.status === 'fulfilled') {
@@ -199,12 +201,21 @@ export default function SkillDetail() {
     if (!remoteUpdateInfo) return
     setApplyingUpdate(true)
     try {
-      await skillsShApi.install({
-        ownerRepo: remoteUpdateInfo.owner_repo,
-        skillPath: remoteUpdateInfo.skill_path,
-        skillName: remoteUpdateInfo.skill_name,
-        folderSha: remoteUpdateInfo.remote_sha,
-        files: [],
+      // 从 catalog 查找最新版本，获取正确的 source_path 和 commit_sha
+      const catalog = await catalogApi.fetch()
+      const catalogSkill = catalog.find(
+        s => s.name.toLowerCase() === remoteUpdateInfo.skill_name.toLowerCase()
+          || s.source_repo === remoteUpdateInfo.owner_repo
+      )
+      if (!catalogSkill) {
+        toast.error(`商城中找不到 ${remoteUpdateInfo.skill_name} 的最新版本`)
+        return
+      }
+      await catalogApi.install({
+        sourceRepo: catalogSkill.source_repo,
+        sourcePath: catalogSkill.source_path,
+        skillName: catalogSkill.name,
+        commitSha: catalogSkill.commit_sha,
         deployTargets: [],
         forceOverwrite: true,
       })
@@ -270,15 +281,6 @@ export default function SkillDetail() {
               <Button variant="ghost" size="icon" className="h-9 w-9"><MoreHorizontal className="h-4 w-4" /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
-              <DropdownMenuItem onClick={() => {
-                if (skill?.id) {
-                  skillsApi.openSkillInEditor(skill.id).catch((e) => toast.error('打开失败: ' + String(e)))
-                } else {
-                  toast.error('无本地路径')
-                }
-              }}>
-                <ExternalLink className="h-4 w-4 mr-2" /> 在编辑器中打开
-              </DropdownMenuItem>
               <DropdownMenuItem className="text-red-500" onClick={() => setDeleteDialogOpen(true)}>
                 <Trash2 className="h-4 w-4 mr-2" /> 删除 Skill
               </DropdownMenuItem>
@@ -663,31 +665,160 @@ export default function SkillDetail() {
           <TabsContent value="files">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="text-base">文件列表</CardTitle>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className="rounded-xl gap-1"
-                    onClick={() => skillsApi.openSkillInEditor(skill.id).catch((e) => toast.error(String(e)))}
-                  >
-                    <ExternalLink className="h-4 w-4" /> 在编辑器中打开
-                  </Button>
+                <CardTitle className="text-base flex items-center gap-2">
+                  文件列表
+                  {skillFiles.length > 0 && (
+                    <span className="text-xs font-normal text-cream-400 bg-cream-100 px-2 py-0.5 rounded-full">
+                      {skillFiles.length} 个文件
+                    </span>
+                  )}
+                </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-3">
                 {skillFiles.length === 0 ? (
                   <div className="text-center py-8">
                     <Folder className="h-8 w-8 text-cream-300 mx-auto mb-2" />
                     <p className="text-cream-400 text-sm">没有找到文件</p>
                   </div>
                 ) : (
-                  <div className="bg-cream-50 rounded-xl p-3 space-y-1.5">
-                    <p className="text-xs text-cream-400 mb-2 font-mono">{skill.id}</p>
-                    {skillFiles.map((f) => (
-                      <div key={f} className="flex items-center gap-2 group">
-                        <FileText className="h-3 w-3 text-cream-300 shrink-0" />
-                        <p className="text-xs text-cream-600 font-mono flex-1">{f}</p>
-                      </div>
-                    ))}
+                  <div className="flex gap-3">
+                    {/* 左侧：文件树 */}
+                    <div className="w-56 shrink-0 bg-cream-50 rounded-xl p-2 space-y-0.5 overflow-y-auto max-h-96 border border-cream-100">
+                      {(() => {
+                        // 构建目录树
+                        const dirs: Record<string, string[]> = {}
+                        const rootFiles: string[] = []
+                        for (const f of skillFiles) {
+                          const slash = f.lastIndexOf('/')
+                          if (slash === -1) { rootFiles.push(f) }
+                          else {
+                            const dir = f.slice(0, slash)
+                            if (!dirs[dir]) dirs[dir] = []
+                            dirs[dir].push(f)
+                          }
+                        }
+                        const getFileIcon = (name: string) => {
+                          const ext = name.split('.').pop()?.toLowerCase()
+                          if (ext === 'md') return '📝'
+                          if (['ts', 'tsx', 'js', 'jsx'].includes(ext ?? '')) return '📜'
+                          if (ext === 'json') return '📋'
+                          if (['py', 'rs', 'go', 'rb'].includes(ext ?? '')) return '⚙️'
+                          if (['png', 'jpg', 'svg', 'gif', 'webp'].includes(ext ?? '')) return '🖼️'
+                          return '📄'
+                        }
+                        return (
+                          <>
+                            {/* 根目录文件 */}
+                            {rootFiles.map((f) => (
+                              <button
+                                key={f}
+                                onClick={async () => {
+                                  setSelectedFile(f)
+                                  setLoadingFile(true)
+                                  try {
+                                    const content = await skillsApi.readFile(skill.id, f)
+                                    setSelectedFileContent(content)
+                                  } catch { setSelectedFileContent(null) }
+                                  finally { setLoadingFile(false) }
+                                }}
+                                className={cn(
+                                  'w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-left text-xs transition-colors',
+                                  selectedFile === f
+                                    ? 'bg-peach-100 text-peach-700'
+                                    : 'text-cream-600 hover:bg-cream-100'
+                                )}
+                              >
+                                <span className="text-[10px]">{getFileIcon(f)}</span>
+                                <span className="font-mono truncate">{f}</span>
+                              </button>
+                            ))}
+                            {/* 目录及其文件 */}
+                            {Object.entries(dirs).map(([dir, files]) => {
+                              const isOpen = expandedDirs.has(dir)
+                              return (
+                                <div key={dir}>
+                                  <button
+                                    onClick={() => setExpandedDirs((prev) => {
+                                      const s = new Set(prev)
+                                      isOpen ? s.delete(dir) : s.add(dir)
+                                      return s
+                                    })}
+                                    className="w-full flex items-center gap-1 px-2 py-1 rounded-lg text-left text-xs text-cream-700 hover:bg-cream-100 transition-colors"
+                                  >
+                                    {isOpen
+                                      ? <><ChevronDown className="h-3 w-3 shrink-0" /><FolderOpen className="h-3 w-3 text-honey-400 shrink-0" /></>
+                                      : <><ChevronRight className="h-3 w-3 shrink-0" /><Folder className="h-3 w-3 text-honey-400 shrink-0" /></>
+                                    }
+                                    <span className="font-mono font-medium truncate">{dir}</span>
+                                    <span className="ml-auto text-cream-300 shrink-0">{files.length}</span>
+                                  </button>
+                                  {isOpen && (
+                                    <div className="ml-4 mt-0.5 space-y-0.5">
+                                      {files.map((f) => {
+                                        const name = f.split('/').pop() ?? f
+                                        return (
+                                          <button
+                                            key={f}
+                                            onClick={async () => {
+                                              setSelectedFile(f)
+                                              setLoadingFile(true)
+                                              try {
+                                                const content = await skillsApi.readFile(skill.id, f)
+                                                setSelectedFileContent(content)
+                                              } catch { setSelectedFileContent(null) }
+                                              finally { setLoadingFile(false) }
+                                            }}
+                                            className={cn(
+                                              'w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-left text-xs transition-colors',
+                                              selectedFile === f
+                                                ? 'bg-peach-100 text-peach-700'
+                                                : 'text-cream-600 hover:bg-cream-100'
+                                            )}
+                                          >
+                                            <span className="text-[10px]">{getFileIcon(name)}</span>
+                                            <span className="font-mono truncate">{name}</span>
+                                          </button>
+                                        )
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </>
+                        )
+                      })()}
+                    </div>
+
+                    {/* 右侧：文件内容预览 */}
+                    <div className="flex-1 min-w-0 bg-cream-50 rounded-xl border border-cream-100 overflow-hidden">
+                      {!selectedFile ? (
+                        <div className="flex flex-col items-center justify-center h-full py-12 text-center">
+                          <FileText className="h-8 w-8 text-cream-200 mb-2" />
+                          <p className="text-xs text-cream-400">点击左侧文件查看内容</p>
+                        </div>
+                      ) : loadingFile ? (
+                        <div className="flex items-center justify-center h-full py-12">
+                          <Loader2 className="h-5 w-5 text-peach-400 animate-spin" />
+                        </div>
+                      ) : (
+                        <div className="flex flex-col h-full max-h-96">
+                          <div className="flex items-center justify-between px-3 py-2 border-b border-cream-100 bg-white">
+                            <span className="text-xs font-mono text-cream-600 truncate">{selectedFile}</span>
+                            <button onClick={() => { setSelectedFile(null); setSelectedFileContent(null) }} className="text-cream-400 hover:text-cream-700 ml-2 shrink-0">
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                          {selectedFileContent === null ? (
+                            <div className="p-4 text-xs text-cream-400">无法读取文件内容（可能是二进制文件）</div>
+                          ) : (
+                            <pre className="flex-1 overflow-auto p-3 text-xs font-mono text-cream-700 leading-relaxed whitespace-pre-wrap break-all">
+                              {selectedFileContent}
+                            </pre>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </CardContent>
@@ -698,7 +829,7 @@ export default function SkillDetail() {
 
       {/* 新增部署对话框 */}
       <Dialog open={deployDialogOpen} onOpenChange={setDeployDialogOpen}>
-        <DialogContent>
+        <DialogContent className="flex flex-col max-h-[85vh]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <UploadCloud className="h-5 w-5" /> 数据库 → 部署
@@ -707,7 +838,7 @@ export default function SkillDetail() {
               将 <strong>{skill.name}</strong> 从数据库部署到项目目录或工具全局目录。
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="flex-1 overflow-y-auto space-y-4 pr-1">
             {/* 部署类型 */}
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -773,7 +904,7 @@ export default function SkillDetail() {
               </div>
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="pt-2 border-t border-cream-100">
             <Button variant="outline" onClick={() => setDeployDialogOpen(false)}>取消</Button>
             <Button
               className="bg-peach-500 hover:bg-peach-600 text-white"
@@ -795,21 +926,14 @@ export default function SkillDetail() {
               此操作将删除该 Skill 的所有 {skillDeployments.length} 个部署（包括磁盘文件）和数据库记录。不可撤销。
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+          <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-orange-500 hover:bg-orange-600 text-white"
-              disabled={deleting}
-              onClick={(e) => { e.preventDefault(); handleBatchDelete(false) }}
-            >
-              {deleting ? '删除中...' : '删除部署（保留本地库）'}
-            </AlertDialogAction>
             <AlertDialogAction
               className="bg-red-500 hover:bg-red-600 text-white"
               disabled={deleting}
-              onClick={(e) => { e.preventDefault(); handleBatchDelete(true) }}
+              onClick={(e) => { e.preventDefault(); handleBatchDelete() }}
             >
-              {deleting ? '删除中...' : '完全删除（含本地文件）'}
+              {deleting ? '删除中...' : '确认删除'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

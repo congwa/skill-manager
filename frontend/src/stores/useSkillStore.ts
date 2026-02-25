@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { Skill, SkillDeployment, SkillBackup } from '@/types'
-import { skillsApi, deploymentsApi } from '@/lib/tauri-api'
-import type { SkillRow, DeploymentRow, SkillBackupRow } from '@/lib/tauri-api'
+import { skillsApi, deploymentsApi, catalogApi } from '@/lib/tauri-api'
+import type { SkillRow, DeploymentRow, SkillBackupRow, RemoteUpdateInfo } from '@/lib/tauri-api'
 
 function mapSkillRow(row: SkillRow): Skill {
   return {
@@ -10,11 +10,13 @@ function mapSkillRow(row: SkillRow): Skill {
     description: row.description || '',
     version: row.version || '',
     source: (row.source_type as Skill['source']) || 'local',
-    local_path: row.local_path || '',
     checksum: row.checksum || '',
     tags: [],
     last_modified_at: row.last_modified || row.updated_at,
     created_at: row.created_at,
+    watcher_modified_at: row.watcher_modified_at,
+    watcher_backup_id: row.watcher_backup_id,
+    watcher_trigger_dep_id: row.watcher_trigger_dep_id,
   }
 }
 
@@ -45,28 +47,28 @@ interface SkillStore {
   skills: Skill[]
   deployments: SkillDeployment[]
   backups: SkillBackup[]
+  remoteUpdates: RemoteUpdateInfo[]
   selectedSkillId: string | null
   isLoading: boolean
-  searchQuery: string
-  setSearchQuery: (query: string) => void
   selectSkill: (id: string | null) => void
   fetchSkills: () => Promise<void>
   fetchDeployments: () => Promise<void>
   fetchBackups: (skillId: string) => Promise<void>
+  checkSkillUpdates: () => Promise<void>
   getSkillById: (id: string) => Skill | undefined
   getDeploymentsForSkill: (skillId: string) => SkillDeployment[]
   getDeploymentsForProject: (projectId: string) => SkillDeployment[]
   getSkillForDeployment: (deployment: SkillDeployment) => Skill | undefined
+  getUpdateInfo: (skillId: string) => RemoteUpdateInfo | undefined
 }
 
 export const useSkillStore = create<SkillStore>()((set, get) => ({
   skills: [],
   deployments: [],
   backups: [],
+  remoteUpdates: [],
   selectedSkillId: null,
   isLoading: false,
-  searchQuery: '',
-  setSearchQuery: (query) => set({ searchQuery: query }),
   selectSkill: (id) => set({ selectedSkillId: id }),
   fetchSkills: async () => {
     console.log('[SkillStore] fetchSkills 开始')
@@ -102,8 +104,17 @@ export const useSkillStore = create<SkillStore>()((set, get) => ({
       set({ backups: [] })
     }
   },
+  checkSkillUpdates: async () => {
+    try {
+      const updates = await catalogApi.checkUpdates()
+      set({ remoteUpdates: updates })
+    } catch (e) {
+      console.error('[SkillStore] checkSkillUpdates 失败:', e)
+    }
+  },
   getSkillById: (id) => get().skills.find((s) => s.id === id),
   getDeploymentsForSkill: (skillId) => get().deployments.filter((d) => d.skill_id === skillId),
   getDeploymentsForProject: (projectId) => get().deployments.filter((d) => d.project_id === projectId),
   getSkillForDeployment: (deployment) => get().skills.find((s) => s.id === deployment.skill_id),
+  getUpdateInfo: (skillId) => get().remoteUpdates.find((u) => u.skill_id === skillId),
 }))

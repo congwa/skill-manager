@@ -3,7 +3,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::OpenFlags;
 use std::path::Path;
 
-use crate::db::migrations;
+use crate::db::schema;
 use crate::error::AppError;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -37,7 +37,7 @@ pub fn create_pool(db_path: &Path) -> Result<DbPool, AppError> {
 
     {
         let conn = pool.get()?;
-        migrations::run_migrations(&conn)?;
+        schema::init_schema(&conn)?;
     }
 
     Ok(pool)

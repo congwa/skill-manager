@@ -1,12 +1,11 @@
 import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import {
-  FolderOpen, FileText, MapPin, Trash2, Plus, Globe, FolderClosed, Loader2,
+  FolderOpen, MapPin, Trash2, Plus, Globe, FolderClosed, Loader2,
 } from 'lucide-react'
 import { deploymentsApi } from '@/lib/tauri-api'
 import type { SkillDeployment } from '@/types'
@@ -24,7 +23,6 @@ interface SkillInfo {
   name: string
   description: string | null
   version: string | null
-  local_path: string | null
 }
 
 interface SkillInfoPanelProps {
@@ -117,18 +115,6 @@ export default function SkillInfoPanel({ skill, deployments: allDeployments, pro
 
       {skill.description && (
         <p className="text-cream-500 line-clamp-2 leading-relaxed">{skill.description}</p>
-      )}
-
-      {skill.local_path && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="flex items-center gap-1.5 cursor-help">
-              <FileText className="h-3 w-3 text-cream-400 shrink-0" />
-              <span className="text-cream-400 truncate text-[10px]">{skill.local_path}</span>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="right"><p className="text-xs">{skill.local_path}</p></TooltipContent>
-        </Tooltip>
       )}
 
       {/* 部署列表 */}

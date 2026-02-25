@@ -1,7 +1,7 @@
+pub mod catalog;
 pub mod projects;
 pub mod skill_files;
 pub mod skills;
-pub mod skillssh;
 pub mod deployments;
 pub mod settings;
 pub mod scanner;

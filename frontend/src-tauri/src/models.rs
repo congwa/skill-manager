@@ -24,12 +24,17 @@ pub struct Skill {
     pub description: Option<String>,
     pub version: Option<String>,
     pub checksum: Option<String>,
-    pub local_path: Option<String>,
     pub last_modified: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     /// 来源类型：'local' | 'skills-sh' | 'github' | 'gitee'，来自 skill_sources 表
     pub source_type: String,
+    /// Watcher 检测到部署目录变更并同步到 DB 的时间，NULL 表示无待处理变更
+    pub watcher_modified_at: Option<String>,
+    /// 写入前自动备份的 backup ID，用于"放弃并还原"操作
+    pub watcher_backup_id: Option<String>,
+    /// 触发此次 watcher 变更的 deployment ID
+    pub watcher_trigger_dep_id: Option<String>,
 }
 
 // ── Skill Sources ──
@@ -46,6 +51,37 @@ pub struct SkillSource {
     pub skill_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+// ── dmgrok Catalog ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CatalogSkill {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub provider: String,
+    pub category: String,
+    pub license: Option<String>,
+    pub compatibility: Option<String>,
+    pub last_updated_at: String,
+    pub has_scripts: bool,
+    pub has_references: bool,
+    pub has_assets: bool,
+    pub tags: Vec<String>,
+    pub days_since_update: u32,
+    pub maintenance_status: String,
+    pub quality_score: u32,
+    /// source.repo — "owner/repo" 形式
+    pub source_repo: String,
+    /// source.path — skill 在仓库中的相对路径
+    pub source_path: String,
+    /// source.skill_md_url — SKILL.md 的 Raw URL，直接可用
+    pub skill_md_url: String,
+    /// source.commit_sha — 用于更新检测
+    pub commit_sha: String,
+    /// 由 skills.sh API 补充（可能为 None）
+    pub installs: Option<u64>,
 }
 
 // ── skills.sh Search Results ──
@@ -68,30 +104,6 @@ pub struct SkillsShSearchResult {
     pub description: Option<String>,
 }
 
-// ── Repository Tree ──
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepoTreeResult {
-    pub owner_repo: String,
-    pub branch: String,
-    pub skills: Vec<RepoSkillEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepoSkillEntry {
-    pub skill_path: String,
-    pub folder_sha: String,
-    pub file_count: usize,
-    pub files: Vec<RepoFileEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepoFileEntry {
-    pub path: String,
-    pub sha: String,
-    pub size: Option<u64>,
-}
-
 // ── skills.sh Install ──
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,7 +115,6 @@ pub struct DeployTarget {
 #[derive(Debug, Clone, Serialize)]
 pub struct SkillsShInstallResult {
     pub skill_id: String,
-    pub local_path: String,
     pub files_downloaded: usize,
     pub deployments_created: usize,
     pub conflict: Option<InstallConflict>,
@@ -161,39 +172,6 @@ pub struct SkillBackup {
     pub reason: String,
     pub metadata: Option<String>,
     pub created_at: String,
-}
-
-// ── Sync History ──
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncHistoryEntry {
-    pub id: String,
-    pub skill_id: String,
-    pub deployment_id: Option<String>,
-    pub action: String,
-    pub from_checksum: Option<String>,
-    pub to_checksum: Option<String>,
-    pub status: String,
-    pub error_message: Option<String>,
-    pub created_at: String,
-}
-
-// ── Change Events ──
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChangeEvent {
-    pub id: String,
-    pub deployment_id: String,
-    pub event_type: String,
-    pub old_checksum: Option<String>,
-    pub new_checksum: Option<String>,
-    pub resolution: Option<String>,
-    pub resolved_at: Option<String>,
-    pub created_at: String,
-    pub skill_name: Option<String>,
-    pub project_name: Option<String>,
-    pub tool: Option<String>,
-    pub deploy_path: Option<String>,
 }
 
 // ── Git Export Config ──

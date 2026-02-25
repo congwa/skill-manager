@@ -208,34 +208,6 @@ pub fn db_export_to_dir(
     Ok(count)
 }
 
-/// 将 DB 中 Skill 的文件写出到标准库路径 `~/.skills-manager/skills/{name}`，
-/// 返回该路径（供编辑器打开等场景使用）
-pub fn db_export_to_lib(
-    conn: &Connection,
-    skill_id: &str,
-    skill_name: &str,
-) -> Result<std::path::PathBuf, AppError> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| AppError::Internal("无法获取用户主目录".into()))?;
-    let lib_dir = home
-        .join(".skills-manager")
-        .join("skills")
-        .join(skill_name);
-
-    if lib_dir.exists() {
-        let _ = std::fs::remove_dir_all(&lib_dir);
-    }
-    db_export_to_dir(conn, skill_id, &lib_dir)?;
-
-    // 回写 local_path（让旧代码兼容）
-    let lp = lib_dir.to_string_lossy().to_string();
-    let _ = conn.execute(
-        "UPDATE skills SET local_path = ?1, updated_at = datetime('now') WHERE id = ?2",
-        params![lp, skill_id],
-    );
-
-    Ok(lib_dir)
-}
 
 // ── Checksum 计算 ────────────────────────────────────────────────────────────
 

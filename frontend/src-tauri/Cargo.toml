@@ -1,6 +1,6 @@
 [package]
 name = "skills-manager"
-version = "0.1.0"
+version = "1.0.1"
 description = "跨平台 AI 编码工具 Skill 统一管理器"
 authors = ["congwa"]
 edition = "2021"
@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"

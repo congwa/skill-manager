@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { listen } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 import { AppLayout } from '@/components/layout/AppLayout'
 import Onboarding from '@/pages/Onboarding'
 import ProjectList from '@/pages/ProjectList'
@@ -23,6 +24,7 @@ function App() {
   const fetchProjects = useProjectStore((s) => s.fetchProjects)
   const fetchSkills = useSkillStore((s) => s.fetchSkills)
   const fetchDeployments = useSkillStore((s) => s.fetchDeployments)
+  const checkSkillUpdates = useSkillStore((s) => s.checkSkillUpdates)
   const fetchSettings = useSettingsStore((s) => s.fetchSettings)
   const [appReady, setAppReady] = useState(false)
 
@@ -90,22 +92,35 @@ function App() {
     bootstrap()
   }, [])
 
+  // F12 打开/关闭 DevTools
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'F12') {
+        invoke('open_devtools').catch(() => {})
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
   // 监听后端 skill-change 事件，自动刷新数据
   useEffect(() => {
     let unlisten: (() => void) | undefined
-    listen<{ event_id: string; event_type: string; path: string; deployment_id: string }>(
+    listen<{ event_id: string; event_type: string; path: string; deployment_id: string; skill_id?: string }>(
       'skill-change',
       (event) => {
         console.log('[App] 收到 skill-change 事件:', event.payload)
         fetchDeployments()
-        toast.info(`检测到文件变更: ${event.payload.event_type}`, {
+        fetchSkills()
+        checkSkillUpdates()
+        toast.info(`检测到部署目录文件变更`, {
           description: event.payload.path.split('/').slice(-3).join('/'),
           duration: 4000,
         })
       }
     ).then((fn) => { unlisten = fn })
     return () => { unlisten?.() }
-  }, [fetchDeployments])
+  }, [fetchDeployments, fetchSkills, checkSkillUpdates])
 
   if (!appReady) {
     return (

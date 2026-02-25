@@ -1,11 +1,11 @@
 use log::info;
 use rusqlite::params;
-use tauri::State;
+use tauri::{State, WebviewWindow};
 use uuid::Uuid;
 
 use crate::db::DbPool;
 use crate::error::AppError;
-use crate::models::{AppSetting, GitExportConfig, ChangeEvent, SyncHistoryEntry};
+use crate::models::{AppSetting, GitExportConfig};
 
 // ── App Settings ──
 
@@ -151,104 +151,6 @@ pub async fn delete_git_export_config(
     Ok(())
 }
 
-// ── Change Events ──
-
-#[tauri::command]
-pub async fn get_change_events(
-    status_filter: Option<String>,
-    pool: State<'_, DbPool>,
-) -> Result<Vec<ChangeEvent>, AppError> {
-    info!("[get_change_events] status_filter={:?}", status_filter);
-    let conn = pool.get()?;
-
-    let base_query = "SELECT ce.id, ce.deployment_id, ce.event_type, ce.old_checksum, ce.new_checksum,
-                ce.resolution, ce.resolved_at, ce.created_at,
-                s.name as skill_name, p.name as project_name, d.tool, d.path
-         FROM change_events ce
-         LEFT JOIN skill_deployments d ON d.id = ce.deployment_id
-         LEFT JOIN skills s ON s.id = d.skill_id
-         LEFT JOIN projects p ON p.id = d.project_id";
-
-    let query = if let Some(ref status) = status_filter {
-        let safe_status = match status.as_str() {
-            "pending" | "lib_updated" | "redeployed" | "ignored" | "conflict_resolved" => status.as_str(),
-            _ => "pending",
-        };
-        format!("{} WHERE ce.resolution = '{}' ORDER BY ce.created_at DESC", base_query, safe_status)
-    } else {
-        format!("{} ORDER BY ce.created_at DESC", base_query)
-    };
-
-    let mut stmt = conn.prepare(&query)?;
-
-    let events = stmt.query_map([], |row| {
-        Ok(ChangeEvent {
-            id: row.get(0)?,
-            deployment_id: row.get(1)?,
-            event_type: row.get(2)?,
-            old_checksum: row.get(3)?,
-            new_checksum: row.get(4)?,
-            resolution: row.get(5)?,
-            resolved_at: row.get(6)?,
-            created_at: row.get(7)?,
-            skill_name: row.get(8)?,
-            project_name: row.get(9)?,
-            tool: row.get(10)?,
-            deploy_path: row.get(11)?,
-        })
-    })?.collect::<Result<Vec<_>, _>>()?;
-
-    info!("[get_change_events] 返回 {} 条变更事件", events.len());
-    Ok(events)
-}
-
-#[tauri::command]
-pub async fn resolve_change_event(
-    event_id: String,
-    resolution: String,
-    pool: State<'_, DbPool>,
-) -> Result<(), AppError> {
-    let conn = pool.get()?;
-    conn.execute(
-        "UPDATE change_events SET resolution = ?1, resolved_at = datetime('now')
-         WHERE id = ?2",
-        params![resolution, event_id],
-    )?;
-    Ok(())
-}
-
-// ── Sync History ──
-
-#[tauri::command]
-pub async fn get_sync_history(
-    limit: Option<i64>,
-    pool: State<'_, DbPool>,
-) -> Result<Vec<SyncHistoryEntry>, AppError> {
-    let limit = limit.unwrap_or(50);
-    let conn = pool.get()?;
-    let mut stmt = conn.prepare(
-        "SELECT id, skill_id, deployment_id, action, from_checksum, to_checksum,
-                status, error_message, created_at
-         FROM sync_history ORDER BY created_at DESC LIMIT ?1"
-    )?;
-
-    let history = stmt.query_map(params![limit], |row| {
-        Ok(SyncHistoryEntry {
-            id: row.get(0)?,
-            skill_id: row.get(1)?,
-            deployment_id: row.get(2)?,
-            action: row.get(3)?,
-            from_checksum: row.get(4)?,
-            to_checksum: row.get(5)?,
-            status: row.get(6)?,
-            error_message: row.get(7)?,
-            created_at: row.get(8)?,
-        })
-    })?.collect::<Result<Vec<_>, _>>()?;
-
-    Ok(history)
-}
-
 // ── App Initialization ──
 
 #[derive(serde::Serialize)]
@@ -363,13 +265,30 @@ pub async fn reset_app(pool: State<'_, DbPool>) -> Result<(), AppError> {
          DELETE FROM skill_backups;
          DELETE FROM skill_deployments;
          DELETE FROM skill_sources;
+         DELETE FROM skill_files;
          DELETE FROM skills;
          DELETE FROM projects;
          DELETE FROM git_export_config;
-         DELETE FROM app_settings;
-         DELETE FROM schema_version;"
+         DELETE FROM app_settings;"
+    )?;
+
+    // 清空后写回默认设置，下次启动会走引导流程
+    tx.execute_batch(
+        "INSERT INTO app_settings (key, value) VALUES
+             ('onboarding_completed', 'false'),
+             ('theme',                'system'),
+             ('language',             'zh-CN'),
+             ('startup_page',         'projects'),
+             ('notifications_enabled','true'),
+             ('file_watch_enabled',   'true'),
+             ('auto_export_frequency','manual');"
     )?;
 
     tx.commit()?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn open_devtools(window: WebviewWindow) {
+    window.open_devtools();
 }
